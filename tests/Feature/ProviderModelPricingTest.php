@@ -1,0 +1,253 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Models\ApiKey;
+use App\Models\ModelPrice;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
+use Tests\TestCase;
+
+class ProviderModelPricingTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->actingAs(User::factory()->create());
+    }
+
+    public function test_gemini_models_are_fetched_from_api_when_key_is_available(): void
+    {
+        config(['services.gemini.key' => 'test-gemini-key']);
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/v1beta/models?key=test-gemini-key' => Http::response([
+                'models' => [
+                    [
+                        'name' => 'models/gemini-2.0-flash',
+                        'displayName' => 'Gemini 2.0 Flash',
+                        'supportedGenerationMethods' => ['generateContent', 'countTokens'],
+                    ],
+                    [
+                        'name' => 'models/gemini-2.0-flash-lite',
+                        'displayName' => 'Gemini 2.0 Flash Lite',
+                        'supportedGenerationMethods' => ['generateContent', 'countTokens'],
+                    ],
+                    [
+                        'name' => 'models/text-embedding-004',
+                        'displayName' => 'Text Embedding 004',
+                        'supportedGenerationMethods' => ['embedContent'],
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $response = $this->getJson('/api/providers/models?provider=gemini');
+
+        $response->assertOk();
+        $ids = collect($response->json('models'))->pluck('id');
+        $this->assertTrue($ids->contains('gemini-2.0-flash'));
+        $this->assertTrue($ids->contains('gemini-2.0-flash-lite'));
+        $this->assertFalse($ids->contains('text-embedding-004'));
+        $this->assertSame('$0.10/$0.40', collect($response->json('models'))->firstWhere('id', 'gemini-2.0-flash')['cost']);
+    }
+
+    public function test_gemini_models_fall_back_to_defaults_when_no_key(): void
+    {
+        config(['services.gemini.key' => null]);
+
+        $response = $this->getJson('/api/providers/models?provider=gemini');
+
+        $response->assertOk();
+        $ids = collect($response->json('models'))->pluck('id');
+        $this->assertTrue($ids->contains('gemini-2.5-flash'));
+        $this->assertTrue($ids->contains('gemini-2.5-pro'));
+        $this->assertFalse($ids->contains('gemini-1.5-flash'));
+        $this->assertFalse($ids->contains('gemini-1.5-pro'));
+    }
+
+    public function test_openai_models_fall_back_to_defaults_when_no_key(): void
+    {
+        config(['services.openai.key' => null]);
+
+        $response = $this->getJson('/api/providers/models?provider=openai');
+
+        $response->assertOk();
+
+        $ids = collect($response->json('models'))->pluck('id');
+        $this->assertTrue($ids->contains('gpt-5'));
+        $this->assertTrue($ids->contains('gpt-5-mini'));
+        $this->assertTrue($ids->contains('o3-mini'));
+    }
+
+    public function test_openrouter_model_query_persists_pricing_for_analytics(): void
+    {
+        Cache::forget('analytics:pricing:version');
+
+        Http::fake([
+            'https://openrouter.ai/api/v1/models' => Http::response([
+                'data' => [
+                    [
+                        'id' => 'openai/gpt-4o-mini',
+                        'name' => 'GPT-4o Mini',
+                        'context_length' => 128000,
+                        'pricing' => [
+                            'prompt' => '0.00000015',
+                            'completion' => '0.00000060',
+                        ],
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $response = $this->getJson('/api/providers/models?provider=openrouter');
+
+        $response->assertOk();
+        $response->assertJsonPath('models.0.id', 'openai/gpt-4o-mini');
+        $response->assertJsonPath('models.0.cost', '$0.15/$0.60');
+
+        $this->assertDatabaseHas('model_prices', [
+            'provider' => 'openrouter',
+            'model' => 'openai/gpt-4o-mini',
+        ]);
+
+        $storedPrice = ModelPrice::query()
+            ->where('provider', 'openrouter')
+            ->where('model', 'openai/gpt-4o-mini')
+            ->first();
+
+        $this->assertNotNull($storedPrice);
+        $this->assertSame(0.15, $storedPrice->prompt_per_million);
+        $this->assertSame(0.6, $storedPrice->completion_per_million);
+        $this->assertSame(2, (int) Cache::get('analytics:pricing:version'));
+    }
+
+    public function test_openrouter_models_fall_back_to_curated_list_when_api_fails(): void
+    {
+        Http::fake([
+            'https://openrouter.ai/api/v1/models' => Http::response([], 500),
+        ]);
+
+        $response = $this->getJson('/api/providers/models?provider=openrouter');
+
+        $response->assertOk();
+
+        $ids = collect($response->json('models'))->pluck('id');
+        $this->assertTrue($ids->contains('anthropic/claude-3-sonnet'));
+    }
+
+    public function test_bedrock_models_are_available_from_provider_models_endpoint(): void
+    {
+        $response = $this->getJson('/api/providers/models?provider=bedrock');
+
+        $response->assertOk();
+        $ids = collect($response->json('models'))->pluck('id');
+        $this->assertTrue($ids->contains('anthropic.claude-3-7-sonnet-20250219-v1:0'));
+        $this->assertTrue($ids->contains('anthropic.claude-sonnet-4-20250514-v1:0'));
+    }
+
+    public function test_ollama_models_are_fetched_from_native_api_tags_endpoint(): void
+    {
+        config(['services.ollama.host' => 'http://localhost:11434']);
+
+        Http::fake([
+            'http://localhost:11434/api/tags' => Http::response([
+                'models' => [
+                    ['name' => 'llama3.2:latest'],
+                    ['name' => 'qwen2.5:7b'],
+                ],
+            ], 200),
+        ]);
+
+        $response = $this->getJson('/api/providers/models?provider=ollama');
+
+        $response->assertOk();
+        $ids = collect($response->json('models'))->pluck('id');
+        $this->assertTrue($ids->contains('llama3.2:latest'));
+        $this->assertTrue($ids->contains('qwen2.5:7b'));
+    }
+
+    public function test_ollama_models_are_fetched_from_openai_compatible_endpoint_when_tags_fail(): void
+    {
+        config(['services.ollama.host' => 'http://localhost:11434/v1']);
+
+        Http::fake([
+            'http://localhost:11434/api/tags' => Http::response([], 404),
+            'http://localhost:11434/v1/models' => Http::response([
+                'data' => [
+                    ['id' => 'llama3.2:latest'],
+                    ['id' => 'mistral:latest', 'name' => 'Mistral 7B'],
+                ],
+            ], 200),
+        ]);
+
+        $response = $this->getJson('/api/providers/models?provider=ollama');
+
+        $response->assertOk();
+        $ids = collect($response->json('models'))->pluck('id');
+        $this->assertTrue($ids->contains('llama3.2:latest'));
+        $this->assertTrue($ids->contains('mistral:latest'));
+        $this->assertSame('Mistral 7B', collect($response->json('models'))->firstWhere('id', 'mistral:latest')['name']);
+    }
+
+    public function test_configured_provider_endpoint_includes_all_default_providers_without_user_keys(): void
+    {
+        $response = $this->getJson('/api/providers/configured');
+
+        $response->assertOk();
+
+        $providerIds = collect($response->json('providers'))->pluck('id')->all();
+
+        $this->assertContains('openai', $providerIds);
+        $this->assertContains('anthropic', $providerIds);
+        $this->assertContains('gemini', $providerIds);
+        $this->assertContains('openrouter', $providerIds);
+        $this->assertContains('deepseek', $providerIds);
+        $this->assertContains('bedrock', $providerIds);
+        $this->assertContains('ollama', $providerIds);
+        $this->assertContains('lmstudio', $providerIds);
+        $this->assertContains('mock', $providerIds);
+    }
+
+    public function test_configured_provider_endpoint_exposes_scoped_provider_ids_for_multiple_keys(): void
+    {
+        $user = User::query()->firstOrFail();
+
+        $firstKey = ApiKey::factory()->create([
+            'user_id' => $user->id,
+            'provider' => 'openai',
+            'label' => 'Primary OpenAI',
+            'is_active' => true,
+        ]);
+
+        $secondKey = ApiKey::factory()->create([
+            'user_id' => $user->id,
+            'provider' => 'openai',
+            'label' => 'Secondary OpenAI',
+            'is_active' => true,
+        ]);
+
+        $response = $this->getJson('/api/providers/configured');
+
+        $response->assertOk();
+        $providerIds = collect($response->json('providers'))->pluck('id')->all();
+
+        $this->assertContains('openai', $providerIds);
+        $this->assertContains("openai:{$firstKey->id}", $providerIds);
+        $this->assertContains("openai:{$secondKey->id}", $providerIds);
+    }
+
+    public function test_mock_models_are_available_from_provider_models_endpoint(): void
+    {
+        $response = $this->getJson('/api/providers/models?provider=mock');
+
+        $response->assertOk();
+        $response->assertJsonPath('provider', 'mock');
+        $response->assertJsonPath('models.0.id', 'mock-default');
+        $response->assertJsonPath('models.0.supports_tools', false);
+    }
+}

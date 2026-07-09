@@ -1,0 +1,188 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    html {
+        @apply antialiased;
+    }
+
+    body {
+        @apply bg-zinc-950 text-zinc-100;
+    }
+}
+
+@layer components {
+    /* Glassmorphic panel with dark theme - base style */
+    .glass-panel {
+        @apply bg-zinc-900/40 backdrop-blur-xl border border-white/[0.08];
+    }
+
+    /* Enhanced glass card - matches the modern glass design */
+    .glass-card {
+        @apply relative bg-zinc-900/50 backdrop-blur-2xl rounded-2xl border border-white/[0.08]
+               shadow-[0_8px_32px_rgba(0,0,0,0.4)] overflow-hidden;
+    }
+
+    /* Glass card with subtle glow effect */
+    .glass-card-glow {
+        @apply glass-card ring-1 ring-white/[0.05]
+               shadow-[0_8px_32px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.05)];
+    }
+
+    /* Butter-smooth glass effect helper */
+    .glass-butter {
+        @apply backdrop-blur-3xl transition-[transform,box-shadow,background-color,border-color] duration-500 ease-out;
+    }
+
+    /* Glass card with accent border at bottom */
+    .glass-card-accent {
+        @apply glass-card;
+    }
+
+    .glass-card-accent::after {
+        content: '';
+        @apply absolute bottom-0 left-0 right-0 h-[2px]
+               bg-gradient-to-r from-cyan-500/80 via-teal-500/80 to-emerald-500/80;
+    }
+
+    /* Glass card with colored accent variants */
+    .glass-card-accent-blue::after {
+        @apply bg-gradient-to-r from-blue-500/80 via-cyan-500/80 to-blue-400/80;
+    }
+
+    .glass-card-accent-purple::after {
+        @apply bg-gradient-to-r from-purple-500/80 via-pink-500/80 to-fuchsia-500/80;
+    }
+
+    .glass-card-accent-emerald::after {
+        @apply bg-gradient-to-r from-emerald-500/80 via-teal-500/80 to-cyan-500/80;
+    }
+
+    .glass-card-accent-orange::after {
+        @apply bg-gradient-to-r from-orange-500/80 via-amber-500/80 to-yellow-500/80;
+    }
+
+    /* Enhanced glass effect on hover */
+    .glass-panel-hover {
+        @apply glass-panel hover:bg-zinc-900/60 hover:border-white/[0.12] transition-all duration-300;
+    }
+
+    .glass-card-hover {
+        @apply glass-card transition-all duration-300
+               hover:bg-zinc-900/60 hover:border-white/[0.12]
+               hover:shadow-[0_12px_40px_rgba(0,0,0,0.5)] hover:scale-[1.01];
+    }
+
+
+    /* Input field dark theme */
+    .input-dark {
+        @apply bg-zinc-900/50 border-zinc-700/50 text-zinc-100 placeholder-zinc-500
+               focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20
+               backdrop-blur-sm transition-all;
+    }
+
+    /* Button dark theme */
+    .btn-dark {
+        @apply bg-zinc-800/50 hover:bg-zinc-700/50 text-zinc-100
+               border border-zinc-700/50 hover:border-zinc-600/50
+               backdrop-blur-sm transition-all duration-200;
+    }
+
+    /* Card dark theme with gradient border */
+    .card-dark {
+        @apply glass-panel rounded-xl p-6 shadow-xl shadow-black/20;
+    }
+
+    /* Gradient text utilities */
+    .text-gradient-blue {
+        @apply bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-cyan-400;
+    }
+
+    .text-gradient-purple {
+        @apply bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-pink-400;
+    }
+
+    .text-gradient-emerald {
+        @apply bg-clip-text text-transparent bg-gradient-to-r from-emerald-400 to-teal-400;
+    }
+
+    .text-gradient-cyan {
+        @apply bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-teal-400;
+    }
+
+    .text-gradient-orange {
+        @apply bg-clip-text text-transparent bg-gradient-to-r from-orange-400 to-amber-400;
+    }
+}
+
+@layer utilities {
+    @keyframes butter-reveal {
+        from {
+            opacity: 0;
+            transform: translateY(8px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    @keyframes butter-reveal-strong {
+        from {
+            opacity: 0;
+            transform: translateY(14px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    .butter-reveal {
+        animation: butter-reveal 0.7s ease-out both;
+    }
+
+    .butter-reveal-strong {
+        animation: butter-reveal-strong 0.8s ease-out both;
+    }
+
+    .butter-reveal-delay-1 {
+        animation-delay: 120ms;
+    }
+
+    .butter-reveal-delay-2 {
+        animation-delay: 200ms;
+    }
+
+    .butter-reveal-delay-3 {
+        animation-delay: 320ms;
+    }
+
+    /* Scrollbar dark theme */
+    .scrollbar-dark::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+    }
+
+    .scrollbar-dark::-webkit-scrollbar-track {
+        @apply bg-zinc-900/50;
+    }
+
+    .scrollbar-dark::-webkit-scrollbar-thumb {
+        @apply bg-zinc-700/50 hover:bg-zinc-600/50 rounded-full;
+    }
+
+    /* Glow effect for interactive elements */
+    .glow-blue {
+        @apply shadow-[0_0_30px_rgba(59,130,246,0.15)] hover:shadow-[0_0_40px_rgba(59,130,246,0.25)] transition-shadow;
+    }
+
+    .glow-purple {
+        @apply shadow-[0_0_30px_rgba(168,85,247,0.15)] hover:shadow-[0_0_40px_rgba(168,85,247,0.25)] transition-shadow;
+    }
+
+    .glow-emerald {
+        @apply shadow-[0_0_30px_rgba(16,185,129,0.15)] hover:shadow-[0_0_40px_rgba(16,185,129,0.25)] transition-shadow;
+    }
+}

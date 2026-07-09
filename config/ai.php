@@ -1,0 +1,292 @@
+<?php
+
+return [
+    /*
+    |--------------------------------------------------------------------------
+    | Default AI Driver
+    |--------------------------------------------------------------------------
+    |
+    | This option controls the default AI driver that will be used when
+    | no specific driver is requested. You can change this to any of the
+    | supported drivers: openai, anthropic, gemini, deepseek, openrouter,
+    | bedrock, ollama, lmstudio, mock
+    |
+    */
+
+    'default' => env('AI_DEFAULT_DRIVER', 'openai'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | AI Driver Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Here you may configure the AI drivers and their settings. Each driver
+    | can have its own specific configuration options.
+    |
+    */
+
+    'drivers' => [
+        'openai' => [
+            'enabled' => true,
+        ],
+        'anthropic' => [
+            'enabled' => true,
+        ],
+        'gemini' => [
+            'enabled' => true,
+        ],
+        'deepseek' => [
+            'enabled' => true,
+        ],
+        'openrouter' => [
+            'enabled' => true,
+        ],
+        'bedrock' => [
+            'enabled' => true,
+        ],
+        'ollama' => [
+            'enabled' => true,
+        ],
+        'lmstudio' => [
+            'enabled' => true,
+        ],
+        'mock' => [
+            'enabled' => true,
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Tool Calling (MCP Integration)
+    |--------------------------------------------------------------------------
+    |
+    | Enable AI personas to call MCP tools during conversations. When enabled,
+    | AI models with tool support (OpenAI, Anthropic, Gemini) can search past
+    | conversations, retrieve contextual memory, and access conversation history.
+    |
+    */
+
+    'tools_enabled' => env('AI_TOOLS_ENABLED', true),
+    'max_tool_iterations' => env('AI_MAX_TOOL_ITERATIONS', 5),
+    'tool_result_max_entries' => (int) env('AI_TOOL_RESULT_MAX_ENTRIES', 3),
+    'tool_result_entry_max_chars' => (int) env('AI_TOOL_RESULT_ENTRY_MAX_CHARS', 1200),
+    'tool_result_max_chars' => (int) env('AI_TOOL_RESULT_MAX_CHARS', 4000),
+    'rag_context_message_max_chars' => (int) env('AI_RAG_CONTEXT_MESSAGE_MAX_CHARS', 600),
+    'rag_context_max_chars' => (int) env('AI_RAG_CONTEXT_MAX_CHARS', 4000),
+    'rag_template_prompt_max_chars' => (int) env('AI_RAG_TEMPLATE_PROMPT_MAX_CHARS', 2500),
+    'prompt_char_budgets' => [
+        'default' => (int) env('AI_PROMPT_CHAR_BUDGET_DEFAULT', 120000),
+        'anthropic' => (int) env('AI_PROMPT_CHAR_BUDGET_ANTHROPIC', 90000),
+        'openai' => (int) env('AI_PROMPT_CHAR_BUDGET_OPENAI', 140000),
+        'openrouter' => (int) env('AI_PROMPT_CHAR_BUDGET_OPENROUTER', 140000),
+        'gemini' => (int) env('AI_PROMPT_CHAR_BUDGET_GEMINI', 140000),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | RAG Search Driver
+    |--------------------------------------------------------------------------
+    |
+    | Controls transcript retrieval backend:
+    | - auto: use Qdrant when enabled, otherwise DB-vector fallback
+    | - qdrant: force Qdrant
+    | - database: force DB-vector fallback
+    |
+    */
+
+    'rag_driver' => env('AI_RAG_DRIVER', 'auto'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Pricing Estimates
+    |--------------------------------------------------------------------------
+    |
+    | These values are used for analytics estimates only and are intentionally
+    | conservative defaults. Adjust as needed to reflect your billing rates.
+    | Prices are in USD per 1M tokens unless otherwise specified.
+    |
+    */
+
+    'pricing' => [
+        'per_token_default' => 0.0,
+        'providers' => [
+            'ollama' => 0.0,
+            'lmstudio' => 0.0,
+            'mock' => 0.0,
+        ],
+        'models' => [
+            'gpt-4o-mini' => ['prompt_per_million' => 0.15, 'completion_per_million' => 0.60],
+            'openai/gpt-4o-mini' => ['prompt_per_million' => 0.15, 'completion_per_million' => 0.60],
+            'gpt-4o' => ['prompt_per_million' => 2.50, 'completion_per_million' => 10.00],
+            'openai/gpt-4o' => ['prompt_per_million' => 2.50, 'completion_per_million' => 10.00],
+            'gpt-4o-2024-11-20' => ['prompt_per_million' => 2.50, 'completion_per_million' => 10.00],
+            'openai/gpt-4o-2024-11-20' => ['prompt_per_million' => 2.50, 'completion_per_million' => 10.00],
+            'claude-sonnet-4-5-20250929' => ['prompt_per_million' => 3.00, 'completion_per_million' => 15.00],
+            'anthropic/claude-sonnet-4-5-20250929' => ['prompt_per_million' => 3.00, 'completion_per_million' => 15.00],
+            'claude-haiku-4-5-20251001' => ['prompt_per_million' => 0.80, 'completion_per_million' => 4.00],
+            'anthropic/claude-haiku-4-5-20251001' => ['prompt_per_million' => 0.80, 'completion_per_million' => 4.00],
+            'deepseek-chat' => ['prompt_per_million' => 0.14, 'completion_per_million' => 0.28],
+            'deepseek/deepseek-chat' => ['prompt_per_million' => 0.14, 'completion_per_million' => 0.28],
+            'gemini-1.5-flash' => ['prompt_per_million' => 0.075, 'completion_per_million' => 0.30],
+            'google/gemini-1.5-flash' => ['prompt_per_million' => 0.075, 'completion_per_million' => 0.30],
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Streaming Chunk Size
+    |--------------------------------------------------------------------------
+    |
+    | Limits the size of each broadcast chunk to avoid oversized payloads
+    | when streaming responses. Measured in UTF-8 characters.
+    |
+    */
+
+    'stream_chunk_size' => (int) env('AI_STREAM_CHUNK_SIZE', 1500),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Initial Stream Chunk
+    |--------------------------------------------------------------------------
+    |
+    | Optional small chunk broadcast immediately when a turn starts so the UI
+    | can render a live bubble before provider tokens arrive.
+    |
+    */
+
+    'initial_stream_enabled' => env('AI_INITIAL_STREAM_ENABLED', true),
+    'initial_stream_chunk' => env('AI_INITIAL_STREAM_CHUNK', ''),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Inter-Turn Delay
+    |--------------------------------------------------------------------------
+    |
+    | Delay between conversation turns in milliseconds.
+    |
+    */
+
+    'inter_turn_delay_ms' => (int) env('AI_INTER_TURN_DELAY_MS', 250),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Empty Turn Retry
+    |--------------------------------------------------------------------------
+    |
+    | If a provider returns an empty turn, retry generation this many times
+    | before failing the conversation.
+    |
+    */
+
+    'empty_turn_retry_attempts' => (int) env('AI_EMPTY_TURN_RETRY_ATTEMPTS', 1),
+    'empty_turn_retry_delay_ms' => (int) env('AI_EMPTY_TURN_RETRY_DELAY_MS', 350),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Turn Exception Retry
+    |--------------------------------------------------------------------------
+    |
+    | Retry a turn when transient provider/network exceptions happen.
+    |
+    */
+
+    'turn_exception_retry_attempts' => (int) env('AI_TURN_EXCEPTION_RETRY_ATTEMPTS', 2),
+    'turn_exception_retry_delay_ms' => (int) env('AI_TURN_EXCEPTION_RETRY_DELAY_MS', 1000),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Turn Rescue Attempts
+    |--------------------------------------------------------------------------
+    |
+    | After retries are exhausted for empty content or retryable failures,
+    | run this many additional rescue generations before using fallback text.
+    |
+    */
+
+    'turn_rescue_attempts' => (int) env('AI_TURN_RESCUE_ATTEMPTS', 1),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Active Conversation Kickstart
+    |--------------------------------------------------------------------------
+    |
+    | Automatically re-dispatch stale active chat sessions that appear stuck.
+    | This protects sessions that remain active but stop making progress.
+    |
+    */
+
+    'active_conversation_kickstart_after_seconds' => (int) env('AI_ACTIVE_KICKSTART_AFTER_SECONDS', 90),
+    'active_conversation_kickstart_cooldown_seconds' => (int) env('AI_ACTIVE_KICKSTART_COOLDOWN_SECONDS', 120),
+    'active_conversation_auto_recovery_enabled' => env('AI_ACTIVE_AUTO_RECOVERY_ENABLED', true),
+    'active_conversation_auto_recovery_limit' => (int) env('AI_ACTIVE_AUTO_RECOVERY_LIMIT', 100),
+    'active_conversation_force_unlock_after_seconds' => (int) env('AI_ACTIVE_FORCE_UNLOCK_AFTER_SECONDS', 600),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Provider HTTP Client Resilience
+    |--------------------------------------------------------------------------
+    |
+    | Timeout and retry controls for outbound AI provider HTTP requests.
+    | These protect long-running model calls from transient network stalls.
+    |
+    */
+
+    'http_timeout_seconds' => (int) env('AI_HTTP_TIMEOUT_SECONDS', 90),
+    'http_connect_timeout_seconds' => (int) env('AI_HTTP_CONNECT_TIMEOUT_SECONDS', 15),
+    'http_retry_attempts' => (int) env('AI_HTTP_RETRY_ATTEMPTS', 2),
+    'http_retry_delay_ms' => (int) env('AI_HTTP_RETRY_DELAY_MS', 500),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Embedding Population Resilience
+    |--------------------------------------------------------------------------
+    |
+    | Controls retries and input normalization for admin-driven embedding
+    | population to keep permanently unembeddable records from retry loops.
+    |
+    */
+
+    'embedding_population_max_attempts' => (int) env('AI_EMBEDDING_POPULATION_MAX_ATTEMPTS', 5),
+    'embedding_input_max_chars' => (int) env('AI_EMBEDDING_INPUT_MAX_CHARS', 8000),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Empty Turn Fallback Message
+    |--------------------------------------------------------------------------
+    |
+    | Safety net text used when a provider repeatedly returns empty content.
+    |
+    */
+
+    'empty_turn_fallback_message' => env(
+        'AI_EMPTY_TURN_FALLBACK_MESSAGE',
+        'I need to regroup for a moment. Please continue with your strongest next point.'
+    ),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Broadcast Payload Limit
+    |--------------------------------------------------------------------------
+    |
+    | Maximum payload size (in bytes) allowed for broadcasting events.
+    | Payloads exceeding this limit are skipped to avoid Pusher/Reverb errors.
+    |
+    */
+
+    'broadcast_payload_limit' => (int) env('AI_BROADCAST_PAYLOAD_LIMIT', 20000),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Rate Limiting
+    |--------------------------------------------------------------------------
+    |
+    | Per-minute limits for AI/chat routes. Override via environment variables
+    | for staging/production tuning.
+    |
+    */
+
+    'rate_limiting' => [
+        'chat_create_per_minute' => (int) env('RATE_LIMIT_CHAT_CREATE_PER_MINUTE', 10),
+        'chat_bridge_per_minute' => (int) env('RATE_LIMIT_CHAT_BRIDGE_PER_MINUTE', 30),
+    ],
+];

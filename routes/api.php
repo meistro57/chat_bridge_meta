@@ -1,0 +1,71 @@
+<?php
+
+use App\Http\Controllers\Admin\McpUtilitiesController;
+use App\Http\Controllers\Api\ChatBridgeController;
+use App\Http\Controllers\Api\McpController as ApiMcpController;
+use App\Http\Controllers\McpController;
+use App\Http\Middleware\EnsureChatBridgeOrSanctumToken;
+use App\Http\Middleware\EnsureSanctumToken;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Route;
+
+Route::get('/user', function (Request $request) {
+    return $request->user();
+})->middleware('auth:sanctum');
+
+Route::get('/ready', function (): \Illuminate\Http\JsonResponse {
+    $checks = [];
+    $allHealthy = true;
+
+    try {
+        DB::connection()->getPdo();
+        $checks['database'] = 'ok';
+    } catch (\Throwable) {
+        $checks['database'] = 'error';
+        $allHealthy = false;
+    }
+
+    try {
+        Cache::put('_ready_probe', 1, 5);
+        Cache::get('_ready_probe');
+        $checks['cache'] = 'ok';
+    } catch (\Throwable) {
+        $checks['cache'] = 'error';
+        $allHealthy = false;
+    }
+
+    return response()->json([
+        'status' => $allHealthy ? 'ok' : 'degraded',
+        'checks' => $checks,
+        'timestamp' => now()->toIso8601String(),
+    ], $allHealthy ? 200 : 503);
+});
+
+// Chat Bridge API: accepts shared env token (backward compat) OR personal Sanctum token
+Route::post('/chat-bridge/respond', [ChatBridgeController::class, 'respond'])
+    ->middleware([EnsureChatBridgeOrSanctumToken::class, 'throttle:ai-chat-bridge']);
+
+// MCP routes: personal Sanctum token required (user-specific context)
+Route::middleware(EnsureSanctumToken::class)->group(function () {
+    Route::prefix('mcp')->group(function () {
+        Route::get('/health', [ApiMcpController::class, 'health']);
+        Route::get('/stats', [ApiMcpController::class, 'stats']);
+        Route::get('/recent-chats', [ApiMcpController::class, 'recentChats']);
+        Route::get('/search-chats', [ApiMcpController::class, 'search']);
+        Route::get('/contextual-memory', [ApiMcpController::class, 'contextualMemory']);
+        Route::get('/contextual_memory', [ApiMcpController::class, 'contextualMemory']);
+        Route::get('/conversation/{conversation}', [ApiMcpController::class, 'conversation']);
+    });
+    Route::post('/mcp', [McpController::class, 'handle']);
+});
+
+Route::prefix('admin/mcp-utilities')->middleware([EnsureSanctumToken::class, 'admin'])->group(function () {
+    Route::get('/embeddings/compare', [McpUtilitiesController::class, 'compareEmbeddings']);
+    Route::post('/embeddings/populate', [McpUtilitiesController::class, 'populateEmbeddings']);
+    Route::post('/flush', [McpUtilitiesController::class, 'flush']);
+    Route::get('/traffic', [McpUtilitiesController::class, 'traffic']);
+});
+
+// Provider routes moved to routes/web.php (need session auth for user API key lookup)

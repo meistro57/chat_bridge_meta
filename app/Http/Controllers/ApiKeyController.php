@@ -1,0 +1,285 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\ApiKey;
+use App\Services\AI\Data\MessageData;
+use Illuminate\Http\Request;
+use Inertia\Inertia;
+
+class ApiKeyController extends Controller
+{
+    /**
+     * Supported API key providers.
+     *
+     * @var array<int, string>
+     */
+    private const PROVIDERS = ['openai', 'anthropic', 'gemini', 'deepseek', 'openrouter', 'bedrock', 'ollama', 'lmstudio'];
+
+    /**
+     * Providers that do not require an API key.
+     *
+     * @var array<int, string>
+     */
+    private const NO_KEY_PROVIDERS = ['ollama', 'lmstudio'];
+
+    private function providerRequiresKey(string $provider): bool
+    {
+        return ! in_array($provider, self::NO_KEY_PROVIDERS, true);
+    }
+
+    private function normalizeValidationError(string $provider, string $errorMessage): string
+    {
+        if (
+            $provider === 'gemini'
+            && str_contains($errorMessage, 'is not found for API version')
+        ) {
+            return 'Gemini model is not supported by the configured API version. Update GEMINI_MODEL or use /api/providers/models?provider=gemini to select a supported model.';
+        }
+
+        return $errorMessage;
+    }
+
+    /**
+     * Display a listing of the resource.
+     */
+    public function index()
+    {
+        return Inertia::render('ApiKeys/Index', [
+            'apiKeys' => auth()->user()->apiKeys()->orderBy('provider')->latest()->get()->map(function ($key) {
+                $rawKey = (string) ($key->key ?? '');
+                $maskedKey = $rawKey === ''
+                    ? '(none)'
+                    : substr($rawKey, 0, 8).'...'.substr($rawKey, -4);
+
+                return [
+                    'id' => $key->id,
+                    'provider' => $key->provider,
+                    'label' => $key->label,
+                    'masked_key' => $maskedKey,
+                    'is_active' => (bool) $key->is_active,
+                    'is_validated' => (bool) $key->is_validated,
+                    'last_validated_at' => $key->last_validated_at,
+                    'validation_error' => $key->validation_error,
+                    'created_at' => $key->created_at,
+                ];
+            }),
+        ]);
+    }
+
+    /**
+     * Show the form for creating a new resource.
+     */
+    public function create()
+    {
+        return Inertia::render('ApiKeys/Create', [
+            'providers' => self::PROVIDERS,
+        ]);
+    }
+
+    /**
+     * Store a newly created resource in storage.
+     */
+    public function store(Request $request)
+    {
+        $validated = $request->validate([
+            'provider' => 'required|string',
+            'key' => 'required_unless:provider,ollama,lmstudio|string',
+            'label' => 'nullable|string',
+        ]);
+
+        $provider = (string) $validated['provider'];
+
+        if (! array_key_exists('key', $validated)) {
+            $validated['key'] = '';
+        }
+
+        auth()->user()->apiKeys()->create($validated);
+
+        return redirect()->route('api-keys.index')->with('success', 'API Key added successfully.');
+    }
+
+    /**
+     * Show the form for editing the specified resource.
+     */
+    public function edit(ApiKey $apiKey)
+    {
+        if ($apiKey->user_id !== auth()->id()) {
+            abort(403);
+        }
+
+        return Inertia::render('ApiKeys/Edit', [
+            'apiKey' => [
+                'id' => $apiKey->id,
+                'provider' => $apiKey->provider,
+                'label' => $apiKey->label,
+                'is_active' => (bool) $apiKey->is_active,
+                // Don't send the full key for security
+            ],
+            'providers' => self::PROVIDERS,
+        ]);
+    }
+
+    /**
+     * Update the specified resource in storage.
+     */
+    public function update(Request $request, ApiKey $apiKey)
+    {
+        if ($apiKey->user_id !== auth()->id()) {
+            abort(403);
+        }
+
+        $validated = $request->validate([
+            'provider' => 'required|string',
+            'label' => 'nullable|string',
+            'is_active' => 'boolean',
+            'key' => 'nullable|string', // Optional, only if updating
+        ]);
+
+        $apiKey->fill([
+            'provider' => $validated['provider'],
+            'label' => $validated['label'],
+            'is_active' => $validated['is_active'],
+        ]);
+
+        if (! empty($validated['key'])) {
+            $apiKey->key = $validated['key'];
+        }
+
+        $apiKey->save();
+
+        return redirect()->route('api-keys.index')->with('success', 'API Key updated.');
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     */
+    public function destroy(ApiKey $apiKey)
+    {
+        if ($apiKey->user_id !== auth()->id()) {
+            abort(403);
+        }
+
+        $apiKey->delete();
+
+        return redirect()->route('api-keys.index')->with('success', 'API Key deleted.');
+    }
+
+    /**
+     * Test/validate an API key
+     */
+    public function test(ApiKey $apiKey)
+    {
+        if ($apiKey->user_id !== auth()->id()) {
+            \Log::warning('API Key Test Unauthorized', [
+                'requested_user_id' => $apiKey->user_id,
+                'current_user_id' => auth()->id(),
+            ]);
+            abort(403);
+        }
+
+        $persistValidationState = ! config('safety.read_only_mode', false);
+
+        if ($this->providerRequiresKey($apiKey->provider) && blank($apiKey->key)) {
+            if ($persistValidationState) {
+                $apiKey->update([
+                    'is_validated' => false,
+                    'last_validated_at' => now(),
+                    'validation_error' => 'No API key is stored for this provider.',
+                ]);
+            }
+
+            return response()->json([
+                'success' => false,
+                'message' => 'API key validation failed',
+                'error' => 'No API key is stored for this provider.',
+                'is_validated' => false,
+                'persisted' => $persistValidationState,
+                'last_validated_at' => $apiKey->last_validated_at,
+            ], 422);
+        }
+
+        \Log::info('API Key Test Started', [
+            'api_key_id' => $apiKey->id,
+            'provider' => $apiKey->provider,
+            'user_id' => auth()->id(),
+        ]);
+
+        try {
+            // Use the selected API key record directly to avoid validating another key for the same provider.
+            $driver = app('ai')->driverForApiKey($apiKey);
+
+            \Log::info('AI Driver Created', [
+                'driver_class' => get_class($driver),
+                'model' => method_exists($driver, 'getModel') ? $driver->getModel() : 'Unknown',
+            ]);
+
+            // Test with a simple completion request
+            $messages = collect([
+                new MessageData('user', 'Respond with only the word "OK" to confirm you are working.'),
+            ]);
+
+            \Log::info('Attempting Completion', [
+                'provider' => $apiKey->provider,
+                'messages_count' => $messages->count(),
+            ]);
+
+            // Dynamically call the appropriate chat/completion method
+            $result = method_exists($driver, 'chat')
+                ? $driver->chat($messages)
+                : $driver->completion($messages);
+
+            \Log::info('Completion Result', [
+                'result_length' => strlen($result->content),
+                'result_preview' => substr($result->content, 0, 50),
+            ]);
+
+            // If we get here without exception, the key is valid
+            if ($persistValidationState) {
+                $apiKey->update([
+                    'is_validated' => true,
+                    'last_validated_at' => now(),
+                    'validation_error' => null,
+                ]);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => $persistValidationState
+                    ? 'API key validated successfully'
+                    : 'API key validated successfully (read-only mode: status not persisted)',
+                'is_validated' => true,
+                'persisted' => $persistValidationState,
+                'last_validated_at' => $apiKey->last_validated_at,
+            ]);
+        } catch (\Throwable $e) {
+            $normalizedError = $this->normalizeValidationError($apiKey->provider, $e->getMessage());
+
+            \Log::error('API Key Test Failed', [
+                'provider' => $apiKey->provider,
+                'error_type' => get_class($e),
+                'error_message' => $e->getMessage(),
+                'normalized_error_message' => $normalizedError,
+                'error_trace' => $e->getTraceAsString(),
+            ]);
+
+            // Key is invalid or there was an error
+            if ($persistValidationState) {
+                $apiKey->update([
+                    'is_validated' => false,
+                    'last_validated_at' => now(),
+                    'validation_error' => $normalizedError,
+                ]);
+            }
+
+            return response()->json([
+                'success' => false,
+                'message' => 'API key validation failed',
+                'error' => $normalizedError,
+                'is_validated' => false,
+                'persisted' => $persistValidationState,
+                'last_validated_at' => $apiKey->last_validated_at,
+            ], 422);
+        }
+    }
+}

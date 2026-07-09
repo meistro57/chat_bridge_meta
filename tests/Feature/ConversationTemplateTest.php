@@ -1,0 +1,476 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Models\ConversationTemplate;
+use App\Models\Persona;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
+use Inertia\Testing\AssertableInertia;
+use Tests\TestCase;
+
+class ConversationTemplateTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_user_can_view_template_index(): void
+    {
+        $user = User::factory()->create();
+        $personaA = Persona::factory()->create(['user_id' => $user->id]);
+        $personaB = Persona::factory()->create(['user_id' => $user->id]);
+
+        ConversationTemplate::factory()->create([
+            'user_id' => $user->id,
+            'persona_a_id' => $personaA->id,
+            'persona_b_id' => $personaB->id,
+        ]);
+
+        ConversationTemplate::factory()->publicTemplate()->create([
+            'persona_a_id' => $personaA->id,
+            'persona_b_id' => $personaB->id,
+        ]);
+
+        $response = $this->actingAs($user)->get(route('templates.index'));
+
+        $response->assertOk();
+        $response->assertInertia(fn (AssertableInertia $page) => $page
+            ->component('Templates/Index')
+            ->has('templates')
+            ->has('categories')
+            ->has('filters')
+        );
+    }
+
+    public function test_user_can_create_template(): void
+    {
+        $user = User::factory()->create();
+        $personaA = Persona::factory()->create(['user_id' => $user->id]);
+        $personaB = Persona::factory()->create(['user_id' => $user->id]);
+
+        $response = $this->actingAs($user)->post(route('templates.store'), [
+            'name' => 'Debate Starter',
+            'description' => 'A quick debate template.',
+            'category' => 'Debate',
+            'starter_message' => 'Debate the pros and cons of remote work.',
+            'max_rounds' => 8,
+            'persona_a_id' => $personaA->id,
+            'persona_b_id' => $personaB->id,
+            'is_public' => false,
+        ]);
+
+        $response->assertRedirect();
+        $this->assertDatabaseHas('conversation_templates', [
+            'name' => 'Debate Starter',
+            'user_id' => $user->id,
+        ]);
+    }
+
+    public function test_user_can_create_template_with_max_rounds_500(): void
+    {
+        $user = User::factory()->create();
+        $personaA = Persona::factory()->create(['user_id' => $user->id]);
+        $personaB = Persona::factory()->create(['user_id' => $user->id]);
+
+        $response = $this->actingAs($user)->post(route('templates.store'), [
+            'name' => 'Deep Dive Session',
+            'description' => 'Template with high round cap.',
+            'category' => 'Research',
+            'starter_message' => 'Analyze in depth before concluding.',
+            'max_rounds' => 500,
+            'persona_a_id' => $personaA->id,
+            'persona_b_id' => $personaB->id,
+            'is_public' => false,
+        ]);
+
+        $response->assertRedirect();
+        $this->assertDatabaseHas('conversation_templates', [
+            'name' => 'Deep Dive Session',
+            'user_id' => $user->id,
+            'max_rounds' => 500,
+        ]);
+    }
+
+    public function test_user_can_update_own_template(): void
+    {
+        $user = User::factory()->create();
+        $personaA = Persona::factory()->create(['user_id' => $user->id]);
+        $personaB = Persona::factory()->create(['user_id' => $user->id]);
+
+        $template = ConversationTemplate::factory()->create([
+            'user_id' => $user->id,
+            'persona_a_id' => $personaA->id,
+            'persona_b_id' => $personaB->id,
+        ]);
+
+        $response = $this->actingAs($user)->patch(route('templates.update', $template), [
+            'name' => 'Updated Template',
+            'description' => 'Updated description',
+            'category' => 'Interview',
+            'starter_message' => 'Interview about leadership.',
+            'max_rounds' => 12,
+            'persona_a_id' => $personaA->id,
+            'persona_b_id' => $personaB->id,
+            'is_public' => true,
+        ]);
+
+        $response->assertRedirect();
+        $this->assertDatabaseHas('conversation_templates', [
+            'id' => $template->id,
+            'name' => 'Updated Template',
+            'is_public' => 1,
+        ]);
+    }
+
+    public function test_user_cannot_edit_template_they_do_not_own(): void
+    {
+        $owner = User::factory()->create();
+        $user = User::factory()->create();
+        $personaA = Persona::factory()->create(['user_id' => $owner->id]);
+        $personaB = Persona::factory()->create(['user_id' => $owner->id]);
+
+        $template = ConversationTemplate::factory()->create([
+            'user_id' => $owner->id,
+            'persona_a_id' => $personaA->id,
+            'persona_b_id' => $personaB->id,
+        ]);
+
+        $response = $this->actingAs($user)->get(route('templates.edit', $template));
+
+        $response->assertForbidden();
+    }
+
+    public function test_user_can_use_public_template(): void
+    {
+        $user = User::factory()->create();
+        $personaA = Persona::factory()->create();
+        $personaB = Persona::factory()->create();
+
+        $template = ConversationTemplate::factory()->publicTemplate()->create([
+            'persona_a_id' => $personaA->id,
+            'persona_b_id' => $personaB->id,
+            'is_public' => true,
+        ]);
+
+        $response = $this->actingAs($user)->post(route('templates.use', $template));
+
+        $response->assertRedirect(route('chat.create', ['template' => $template->id]));
+    }
+
+    public function test_user_can_clone_template(): void
+    {
+        $user = User::factory()->create();
+        $personaA = Persona::factory()->create();
+        $personaB = Persona::factory()->create();
+
+        $template = ConversationTemplate::factory()->publicTemplate()->create([
+            'persona_a_id' => $personaA->id,
+            'persona_b_id' => $personaB->id,
+            'is_public' => true,
+        ]);
+
+        $response = $this->actingAs($user)->post(route('templates.clone', $template));
+
+        $response->assertRedirect();
+        $this->assertDatabaseHas('conversation_templates', [
+            'name' => $template->name.' (Copy)',
+            'user_id' => $user->id,
+            'is_public' => 0,
+        ]);
+    }
+
+    public function test_create_form_includes_personas_from_other_users(): void
+    {
+        $user = User::factory()->create();
+        $otherUser = User::factory()->create();
+        $ownPersona = Persona::factory()->create(['user_id' => $user->id]);
+        $otherPersona = Persona::factory()->create(['user_id' => $otherUser->id]);
+        $systemPersona = Persona::factory()->create(['user_id' => null]);
+
+        $response = $this->actingAs($user)->get(route('templates.create'));
+
+        $response->assertOk();
+        $response->assertInertia(fn (AssertableInertia $page) => $page
+            ->component('Templates/Create')
+            ->where('personas', fn ($personas) => collect($personas)->pluck('id')->contains($ownPersona->id)
+                && collect($personas)->pluck('id')->contains($otherPersona->id)
+                && collect($personas)->pluck('id')->contains($systemPersona->id)
+            )
+        );
+    }
+
+    public function test_user_can_save_template_from_chat(): void
+    {
+        $user = User::factory()->create();
+        $personaA = Persona::factory()->create(['user_id' => $user->id]);
+        $personaB = Persona::factory()->create(['user_id' => $user->id]);
+
+        $response = $this->actingAs($user)
+            ->from(route('chat.create'))
+            ->post(route('templates.storeFromChat'), [
+                'name' => 'Chat Snapshot',
+                'description' => 'Saved from chat/create.',
+                'category' => 'Snapshot',
+                'starter_message' => 'Discuss the future of AI.',
+                'max_rounds' => 6,
+                'persona_a_id' => $personaA->id,
+                'persona_b_id' => $personaB->id,
+                'is_public' => false,
+            ]);
+
+        $response->assertRedirect(route('chat.create'));
+        $this->assertDatabaseHas('conversation_templates', [
+            'name' => 'Chat Snapshot',
+            'user_id' => $user->id,
+        ]);
+    }
+
+    public function test_template_forms_prioritize_favorite_personas(): void
+    {
+        $user = User::factory()->create();
+
+        Persona::factory()->create([
+            'user_id' => $user->id,
+            'name' => 'Zulu Persona',
+            'is_favorite' => false,
+        ]);
+
+        $favoritePersona = Persona::factory()->create([
+            'user_id' => $user->id,
+            'name' => 'Alpha Persona',
+            'is_favorite' => true,
+        ]);
+
+        $template = ConversationTemplate::factory()->create([
+            'user_id' => $user->id,
+            'persona_a_id' => $favoritePersona->id,
+            'persona_b_id' => $favoritePersona->id,
+        ]);
+
+        $this->actingAs($user)
+            ->get(route('templates.create'))
+            ->assertInertia(fn (AssertableInertia $page) => $page
+                ->component('Templates/Create')
+                ->where('personas.0.id', $favoritePersona->id)
+            );
+
+        $this->actingAs($user)
+            ->get(route('templates.edit', $template))
+            ->assertInertia(fn (AssertableInertia $page) => $page
+                ->component('Templates/Edit')
+                ->where('personas.0.id', $favoritePersona->id)
+            );
+    }
+
+    public function test_user_can_delete_own_template(): void
+    {
+        $user = User::factory()->create();
+        $personaA = Persona::factory()->create(['user_id' => $user->id]);
+        $personaB = Persona::factory()->create(['user_id' => $user->id]);
+
+        $template = ConversationTemplate::factory()->create([
+            'user_id' => $user->id,
+            'persona_a_id' => $personaA->id,
+            'persona_b_id' => $personaB->id,
+        ]);
+
+        $response = $this->actingAs($user)->delete(route('templates.destroy', $template));
+
+        $response->assertRedirect(route('templates.index'));
+        $this->assertDatabaseMissing('conversation_templates', [
+            'id' => $template->id,
+        ]);
+    }
+
+    public function test_user_can_create_template_with_rag_files_and_settings(): void
+    {
+        Storage::fake('local');
+
+        $user = User::factory()->create();
+        $personaA = Persona::factory()->create(['user_id' => $user->id]);
+        $personaB = Persona::factory()->create(['user_id' => $user->id]);
+
+        $response = $this->actingAs($user)->post(route('templates.store'), [
+            'name' => 'RAG Template',
+            'description' => 'Template with retrieval attachments.',
+            'category' => 'RAG',
+            'starter_message' => 'Use the attached docs before replying.',
+            'max_rounds' => 7,
+            'persona_a_id' => $personaA->id,
+            'persona_b_id' => $personaB->id,
+            'is_public' => false,
+            'rag_enabled' => true,
+            'rag_source_limit' => 8,
+            'rag_score_threshold' => 0.45,
+            'rag_system_prompt' => 'Always cite attached evidence.',
+            'rag_files' => [
+                UploadedFile::fake()->create('handbook.md', 20, 'text/markdown'),
+                UploadedFile::fake()->create('policy.pdf', 30, 'application/pdf'),
+            ],
+        ]);
+
+        $response->assertRedirect();
+
+        $template = ConversationTemplate::query()
+            ->where('user_id', $user->id)
+            ->where('name', 'RAG Template')
+            ->firstOrFail();
+
+        $this->assertTrue((bool) $template->rag_enabled);
+        $this->assertSame(8, $template->rag_source_limit);
+        $this->assertEqualsWithDelta(0.45, (float) $template->rag_score_threshold, 0.0001);
+        $this->assertSame('Always cite attached evidence.', $template->rag_system_prompt);
+        $this->assertCount(2, $template->rag_files ?? []);
+        foreach ($template->rag_files as $path) {
+            Storage::disk('local')->assertExists($path);
+        }
+    }
+
+    public function test_user_can_remove_existing_rag_files_on_template_update(): void
+    {
+        Storage::fake('local');
+
+        $user = User::factory()->create();
+        $personaA = Persona::factory()->create(['user_id' => $user->id]);
+        $personaB = Persona::factory()->create(['user_id' => $user->id]);
+
+        $template = ConversationTemplate::factory()->create([
+            'user_id' => $user->id,
+            'persona_a_id' => $personaA->id,
+            'persona_b_id' => $personaB->id,
+            'rag_enabled' => true,
+            'rag_files' => [],
+        ]);
+
+        $pathToKeep = "template-rag/{$user->id}/{$template->id}/keep.md";
+        $pathToDelete = "template-rag/{$user->id}/{$template->id}/delete.md";
+        Storage::disk('local')->put($pathToKeep, 'keep');
+        Storage::disk('local')->put($pathToDelete, 'delete');
+        $template->update(['rag_files' => [$pathToKeep, $pathToDelete]]);
+
+        $response = $this->actingAs($user)->patch(route('templates.update', $template), [
+            'name' => 'Template Updated',
+            'description' => 'Updated description',
+            'category' => 'RAG',
+            'starter_message' => 'Use attachments.',
+            'max_rounds' => 9,
+            'persona_a_id' => $personaA->id,
+            'persona_b_id' => $personaB->id,
+            'is_public' => false,
+            'rag_enabled' => true,
+            'rag_source_limit' => 5,
+            'rag_score_threshold' => 0.4,
+            'rag_system_prompt' => 'Keep context tight.',
+            'rag_files_to_delete' => [$pathToDelete],
+        ]);
+
+        $response->assertRedirect();
+
+        $template->refresh();
+        $this->assertSame([$pathToKeep], $template->rag_files);
+        Storage::disk('local')->assertExists($pathToKeep);
+        Storage::disk('local')->assertMissing($pathToDelete);
+    }
+
+    public function test_owner_can_toggle_template_favorite_on(): void
+    {
+        $user = User::factory()->create();
+        $template = ConversationTemplate::factory()->create([
+            'user_id' => $user->id,
+            'is_favorite' => false,
+        ]);
+
+        $response = $this->actingAs($user)->patch(route('templates.favorite', $template));
+
+        $response->assertRedirect();
+        $this->assertTrue($template->fresh()->is_favorite);
+    }
+
+    public function test_owner_can_toggle_template_favorite_off(): void
+    {
+        $user = User::factory()->create();
+        $template = ConversationTemplate::factory()->create([
+            'user_id' => $user->id,
+            'is_favorite' => true,
+        ]);
+
+        $response = $this->actingAs($user)->patch(route('templates.favorite', $template));
+
+        $response->assertRedirect();
+        $this->assertFalse($template->fresh()->is_favorite);
+    }
+
+    public function test_toggle_favorite_returns_json_when_requested(): void
+    {
+        $user = User::factory()->create();
+        $template = ConversationTemplate::factory()->create([
+            'user_id' => $user->id,
+            'is_favorite' => false,
+        ]);
+
+        $response = $this->actingAs($user)->patchJson(route('templates.favorite', $template));
+
+        $response->assertOk();
+        $response->assertJson(['ok' => true, 'is_favorite' => true]);
+    }
+
+    public function test_non_owner_cannot_toggle_template_favorite(): void
+    {
+        $owner = User::factory()->create();
+        $other = User::factory()->create();
+        $template = ConversationTemplate::factory()->create([
+            'user_id' => $owner->id,
+            'is_favorite' => false,
+        ]);
+
+        $response = $this->actingAs($other)->patch(route('templates.favorite', $template));
+
+        $response->assertForbidden();
+        $this->assertFalse($template->fresh()->is_favorite);
+    }
+
+    public function test_owner_can_clear_all_template_favorites(): void
+    {
+        $user = User::factory()->create();
+        ConversationTemplate::factory()->count(3)->create([
+            'user_id' => $user->id,
+            'is_favorite' => true,
+        ]);
+
+        $response = $this->actingAs($user)->patchJson(route('templates.favorites.clear'));
+
+        $response->assertOk();
+        $response->assertJson(['ok' => true]);
+        $this->assertSame(0, ConversationTemplate::where('user_id', $user->id)->where('is_favorite', true)->count());
+    }
+
+    public function test_clear_favorites_only_affects_current_user(): void
+    {
+        $user = User::factory()->create();
+        $other = User::factory()->create();
+
+        ConversationTemplate::factory()->create(['user_id' => $user->id, 'is_favorite' => true]);
+        $otherTemplate = ConversationTemplate::factory()->create(['user_id' => $other->id, 'is_favorite' => true]);
+
+        $this->actingAs($user)->patchJson(route('templates.favorites.clear'));
+
+        $this->assertTrue($otherTemplate->fresh()->is_favorite);
+    }
+
+    public function test_favorites_are_sorted_first_in_index(): void
+    {
+        $user = User::factory()->create();
+        ConversationTemplate::factory()->create(['user_id' => $user->id, 'name' => 'Zzz Template', 'is_favorite' => false]);
+        ConversationTemplate::factory()->create(['user_id' => $user->id, 'name' => 'Aaa Template', 'is_favorite' => true]);
+
+        $response = $this->actingAs($user)->get(route('templates.index'));
+
+        $response->assertOk();
+        $response->assertInertia(fn (AssertableInertia $page) => $page
+            ->component('Templates/Index')
+            ->where('templates.0.name', 'Aaa Template')
+            ->where('templates.1.name', 'Zzz Template')
+        );
+    }
+}

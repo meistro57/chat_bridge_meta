@@ -1,0 +1,231 @@
+services:
+  # Main Application (Nginx + PHP-FPM)
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_UID: ${LOCAL_UID:-1000}
+        APP_GID: ${LOCAL_GID:-1000}
+    container_name: chatbridge-app
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - ./storage:/var/www/html/storage
+      - ./bootstrap:/var/www/html/bootstrap
+      - ./.env:/var/www/html/.env
+      - ./database:/var/www/html/database
+      - ./tests:/var/www/html/tests
+      - ./app:/var/www/html/app
+      - ./resources:/var/www/html/resources
+      - ./routes:/var/www/html/routes
+      - ./public:/var/www/html/public
+      - ./config:/var/www/html/config
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - APP_DEBUG=${APP_DEBUG:-false}
+      - DB_HOST=postgres
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - QUEUE_CONNECTION=redis
+      - CACHE_STORE=redis
+      - SESSION_DRIVER=redis
+      - BROADCAST_CONNECTION=reverb
+      - REVERB_APP_ID=${REVERB_APP_ID:-chatbridge}
+      - REVERB_APP_KEY=${REVERB_APP_KEY}
+      - REVERB_APP_SECRET=${REVERB_APP_SECRET}
+      - REVERB_HOST=reverb
+      - REVERB_PORT=8080
+      - REVERB_SERVER_HOST=0.0.0.0
+      - REVERB_SERVER_PORT=8080
+      - REVERB_SCHEME=http
+      - VITE_REVERB_APP_KEY=${REVERB_APP_KEY}
+      - VITE_REVERB_HOST=localhost
+      - VITE_REVERB_PORT=${REVERB_PORT:-18081}
+      - VITE_REVERB_SCHEME=http
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - CODEX_HOME=/var/www/html/.codex
+    ports:
+      - "${APP_PORT:-18080}:80"
+    command: sh -c "mkdir -p /var/log/supervisor && /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf"
+    depends_on:
+      - postgres
+      - redis
+      - qdrant
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - chatbridge-network
+
+  # Queue Worker (4 parallel workers via supervisor)
+  queue:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_UID: ${LOCAL_UID:-1000}
+        APP_GID: ${LOCAL_GID:-1000}
+    container_name: chatbridge-queue
+    restart: unless-stopped
+    working_dir: /var/www/html
+    command: sh -c "mkdir -p /var/log/supervisor && /usr/bin/supervisord -c /var/www/html/docker/supervisor/queue-workers.conf"
+    volumes:
+      - ./storage:/var/www/html/storage
+      - ./bootstrap:/var/www/html/bootstrap
+      - ./.env:/var/www/html/.env
+      - ./database:/var/www/html/database
+      - ./app:/var/www/html/app
+      - ./resources:/var/www/html/resources
+      - ./routes:/var/www/html/routes
+      - ./public:/var/www/html/public
+      - ./config:/var/www/html/config
+      - ./docker:/var/www/html/docker
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - APP_DEBUG=${APP_DEBUG:-false}
+      - DB_HOST=postgres
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - QUEUE_CONNECTION=redis
+      - CACHE_STORE=redis
+      - SESSION_DRIVER=redis
+      - BROADCAST_CONNECTION=reverb
+      - REVERB_APP_ID=${REVERB_APP_ID:-chatbridge}
+      - REVERB_APP_KEY=${REVERB_APP_KEY}
+      - REVERB_APP_SECRET=${REVERB_APP_SECRET}
+      - REVERB_HOST=reverb
+      - REVERB_PORT=8080
+      - REVERB_SERVER_HOST=0.0.0.0
+      - REVERB_SERVER_PORT=8080
+      - REVERB_SCHEME=http
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+    depends_on:
+      - postgres
+      - redis
+      - qdrant
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - chatbridge-network
+
+  # Laravel Reverb WebSocket Server
+  reverb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_UID: ${LOCAL_UID:-1000}
+        APP_GID: ${LOCAL_GID:-1000}
+    container_name: chatbridge-reverb
+    restart: unless-stopped
+    working_dir: /var/www/html
+    command: php artisan reverb:start --host=0.0.0.0 --port=8080
+    volumes:
+      - ./storage:/var/www/html/storage
+      - ./bootstrap:/var/www/html/bootstrap
+      - ./.env:/var/www/html/.env
+      - ./database:/var/www/html/database
+      - ./app:/var/www/html/app
+      - ./resources:/var/www/html/resources
+      - ./routes:/var/www/html/routes
+      - ./public:/var/www/html/public
+      - ./config:/var/www/html/config
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - APP_DEBUG=${APP_DEBUG:-false}
+      - DB_HOST=postgres
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CACHE_STORE=redis
+      - SESSION_DRIVER=redis
+      - QUEUE_CONNECTION=redis
+      - BROADCAST_CONNECTION=reverb
+      - REVERB_APP_ID=${REVERB_APP_ID:-chatbridge}
+      - REVERB_APP_KEY=${REVERB_APP_KEY}
+      - REVERB_APP_SECRET=${REVERB_APP_SECRET}
+      - SKIP_MIGRATIONS=true
+      - SKIP_SEEDING=true
+      - REVERB_HOST=reverb
+      - REVERB_PORT=8080
+      - REVERB_SERVER_HOST=0.0.0.0
+      - REVERB_SERVER_PORT=8080
+      - REVERB_SCHEME=http
+      - VITE_REVERB_APP_KEY=${REVERB_APP_KEY}
+      - VITE_REVERB_HOST=localhost
+      - VITE_REVERB_PORT=${REVERB_PORT:-18081}
+      - VITE_REVERB_SCHEME=http
+    ports:
+      - "${REVERB_PORT:-18081}:8080"
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - chatbridge-network
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: chatbridge-postgres
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${DB_DATABASE:-chatbridge}
+      - POSTGRES_USER=${DB_USERNAME:-chatbridge}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-secret}
+    volumes:
+      - ./storage/postgres:/var/lib/postgresql/data
+    ports:
+      - "${DB_PORT:-15432}:5432"
+    networks:
+      - chatbridge-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-chatbridge}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for Caching and Queue
+  redis:
+    image: redis:7-alpine
+    container_name: chatbridge-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    ports:
+      - "${REDIS_PORT:-16379}:6379"
+    networks:
+      - chatbridge-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Qdrant Vector Database for RAG
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: chatbridge-qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant-data:/qdrant/storage
+    ports:
+      - "${QDRANT_PORT:-16333}:6333"
+      - "${QDRANT_GRPC_PORT:-16334}:6334"
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    networks:
+      - chatbridge-network
+
+networks:
+  chatbridge-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+    driver: local
+  qdrant-data:
+    driver: local

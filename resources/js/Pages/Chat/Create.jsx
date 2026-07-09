@@ -1,0 +1,986 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
+import Modal from '@/Components/Modal';
+import { Head, useForm, usePage, Link } from '@inertiajs/react';
+
+const PROVIDERS = [
+    { id: 'anthropic', name: 'Anthropic (Claude)' },
+    { id: 'openai', name: 'OpenAI (GPT)' },
+    { id: 'openrouter', name: 'OpenRouter' },
+    { id: 'bedrock', name: 'AWS Bedrock' },
+    { id: 'gemini', name: 'Google Gemini' },
+    { id: 'deepseek', name: 'DeepSeek' },
+    { id: 'ollama', name: 'Ollama (Local)' },
+    { id: 'lmstudio', name: 'LM Studio (Local)' },
+    { id: 'mock', name: 'Mock Provider' },
+];
+
+const FALLBACK_MODELS_BY_PROVIDER = {
+    anthropic: [
+        { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5', cost: '$3/$15', supports_tools: true },
+        { id: 'claude-opus-4-5-20251101', name: 'Claude Opus 4.5', cost: '$15/$75', supports_tools: true },
+        { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', cost: '$0.25/$1.25', supports_tools: true },
+        { id: 'claude-3-7-sonnet-20250219', name: 'Claude Sonnet 3.7', cost: '$3/$15', supports_tools: true },
+    ],
+    openai: [
+        { id: 'gpt-5', name: 'GPT-5', cost: '$1.25/$10.00', supports_tools: true },
+        { id: 'gpt-5-mini', name: 'GPT-5 Mini', cost: '$0.25/$2.00', supports_tools: true },
+        { id: 'gpt-5-nano', name: 'GPT-5 Nano', cost: '$0.05/$0.40', supports_tools: true },
+        { id: 'gpt-4.1', name: 'GPT-4.1', cost: '$2.00/$8.00', supports_tools: true },
+        { id: 'gpt-4.1-mini', name: 'GPT-4.1 Mini', cost: '$0.40/$1.60', supports_tools: true },
+        { id: 'gpt-4.1-nano', name: 'GPT-4.1 Nano', cost: '$0.10/$0.40', supports_tools: true },
+        { id: 'gpt-4o', name: 'GPT-4o', cost: '$2.50/$10.00', supports_tools: true },
+        { id: 'gpt-4o-mini', name: 'GPT-4o Mini', cost: '$0.15/$0.60', supports_tools: true },
+        { id: 'o1', name: 'o1', cost: '$15.00/$60.00', supports_tools: true },
+        { id: 'o3-mini', name: 'o3-mini', cost: '$1.10/$4.40', supports_tools: true },
+    ],
+    openrouter: [
+        { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini', cost: '$0.15/$0.60', supports_tools: true },
+        { id: 'openai/gpt-4o', name: 'GPT-4o', cost: '$2.50/$10.00', supports_tools: true },
+        { id: 'anthropic/claude-3-sonnet', name: 'Claude 3 Sonnet', cost: '$3.00/$15.00', supports_tools: true },
+        { id: 'anthropic/claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5', cost: '$3.00/$15.00', supports_tools: true },
+        { id: 'deepseek/deepseek-chat', name: 'DeepSeek Chat', cost: '$0.14/$0.28', supports_tools: true },
+    ],
+    bedrock: [
+        { id: 'anthropic.claude-3-5-sonnet-20241022-v2:0', name: 'Claude 3.5 Sonnet (Bedrock)', cost: '$3.00/$15.00', supports_tools: true },
+        { id: 'anthropic.claude-3-7-sonnet-20250219-v1:0', name: 'Claude 3.7 Sonnet (Bedrock)', cost: '$3.00/$15.00', supports_tools: true },
+        { id: 'anthropic.claude-sonnet-4-20250514-v1:0', name: 'Claude Sonnet 4 (Bedrock)', cost: '$3.00/$15.00', supports_tools: true },
+        { id: 'anthropic.claude-3-5-haiku-20241022-v1:0', name: 'Claude 3.5 Haiku (Bedrock)', cost: '$0.80/$4.00', supports_tools: true },
+    ],
+    gemini: [
+        { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', cost: '$0.15/$0.60', supports_tools: true },
+        { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', cost: '$1.25/$10.00', supports_tools: true },
+        { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', cost: '$0.10/$0.40', supports_tools: true },
+        { id: 'gemini-2.0-flash-lite', name: 'Gemini 2.0 Flash Lite', cost: '$0.075/$0.30', supports_tools: true },
+    ],
+    deepseek: [
+        { id: 'deepseek-chat', name: 'DeepSeek Chat', cost: '$0.14/$0.28', supports_tools: true },
+        { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', cost: '$0.55/$2.19', supports_tools: false },
+    ],
+    ollama: [
+        { id: 'llama3.1', name: 'Llama 3.1', cost: 'FREE (local)' },
+        { id: 'llama3.2', name: 'Llama 3.2', cost: 'FREE (local)' },
+        { id: 'mistral', name: 'Mistral', cost: 'FREE (local)' },
+    ],
+    lmstudio: [
+        { id: 'local-model', name: 'Local Model', cost: 'FREE (local)' },
+    ],
+    mock: [
+        { id: 'mock-default', name: 'Mock Default', cost: 'FREE', supports_tools: false },
+    ],
+};
+
+export default function Create({
+    personas,
+    template,
+    openRouterModels = [],
+    discordDefaults = {},
+    discourseDefaults = {},
+    mcpEnabled = false,
+}) {
+    const modelMatchesQuery = (model, rawQuery) => {
+        const query = rawQuery.trim().toLowerCase();
+        if (query.length === 0) {
+            return true;
+        }
+
+        const searchable = `${model.id || ''} ${model.name || ''}`.toLowerCase();
+        if (searchable.includes(query)) {
+            return true;
+        }
+
+        const tokens = query.split(/[^a-z0-9.]+/i).filter(Boolean);
+        if (tokens.length === 0) {
+            return true;
+        }
+
+        return tokens.every((token) => searchable.includes(token));
+    };
+
+    const { flash } = usePage().props;
+    const selectedPersonaA = personas.find((persona) => persona.id === (template?.persona_a_id ?? ''));
+    const selectedPersonaB = personas.find((persona) => persona.id === (template?.persona_b_id ?? ''));
+    const { data, setData, post, processing, errors, transform } = useForm({
+        persona_a_id: template?.persona_a_id ?? '',
+        persona_b_id: template?.persona_b_id ?? '',
+        template_id: template?.id ?? null,
+        provider_a: '',
+        provider_b: '',
+        model_a: '',
+        model_b: '',
+        temp_a: selectedPersonaA?.temperature ?? 0.7,
+        temp_b: selectedPersonaB?.temperature ?? 0.7,
+        starter_message: template?.starter_message ?? '',
+        max_rounds: template?.max_rounds ?? 10,
+        memory_history_limit: 10,
+        memory_rag_enabled: Boolean(template?.rag_enabled ?? true),
+        memory_rag_source_limit: template?.rag_source_limit ?? 6,
+        memory_rag_score_threshold: template?.rag_score_threshold ?? 0.3,
+        stop_word_detection: false,
+        stop_words: '',
+        stop_word_threshold: 0.8,
+        notifications_enabled: false,
+        discord_streaming_enabled: Boolean(discordDefaults.enabled ?? false),
+        discord_webhook_url: discordDefaults.webhook_url ?? '',
+        discourse_streaming_enabled: Boolean(discourseDefaults.enabled ?? false),
+        discourse_topic_id: '',
+        rag_session_files: [],
+    });
+
+    transform((payload) => ({
+        ...payload,
+        template_id: payload.template_id || null,
+        notifications_enabled: Boolean(payload.notifications_enabled),
+        discord_streaming_enabled: Boolean(payload.discord_streaming_enabled),
+        discourse_streaming_enabled: Boolean(payload.discourse_streaming_enabled),
+        discourse_topic_id: payload.discourse_topic_id ? Number(payload.discourse_topic_id) : null,
+        stop_words: payload.stop_word_detection && payload.stop_words
+            ? payload.stop_words.split(',').map((word) => word.trim()).filter((word) => word.length > 0)
+            : [],
+    }));
+
+    const [configuredProviders, setConfiguredProviders] = useState(
+        PROVIDERS.map((provider) => ({
+            ...provider,
+            supports_tools: true,
+        }))
+    );
+    const [modelsA, setModelsA] = useState([]);
+    const [modelsB, setModelsB] = useState([]);
+    const [loadingModelsA, setLoadingModelsA] = useState(false);
+    const [loadingModelsB, setLoadingModelsB] = useState(false);
+    const [modelFilterA, setModelFilterA] = useState('');
+    const [modelFilterB, setModelFilterB] = useState('');
+    const [showTemplateModal, setShowTemplateModal] = useState(false);
+    const fallbackModelsByProvider = {
+        ...FALLBACK_MODELS_BY_PROVIDER,
+        openrouter: openRouterModels.length > 0 ? openRouterModels : FALLBACK_MODELS_BY_PROVIDER.openrouter,
+    };
+
+    const baseProviderA = data.provider_a.includes(':') ? data.provider_a.split(':')[0] : data.provider_a;
+    const baseProviderB = data.provider_b.includes(':') ? data.provider_b.split(':')[0] : data.provider_b;
+
+    const visibleModelsA = modelsA.length > 0
+        ? modelsA
+        : (data.provider_a ? (fallbackModelsByProvider[baseProviderA] || []) : []);
+    const visibleModelsB = modelsB.length > 0
+        ? modelsB
+        : (data.provider_b ? (fallbackModelsByProvider[baseProviderB] || []) : []);
+
+    const filteredProviders = configuredProviders;
+    const toolFilteredProviderCount = 0;
+
+    const filteredModelsA = useMemo(() => {
+        return visibleModelsA.filter((model) => modelMatchesQuery(model, modelFilterA));
+    }, [visibleModelsA, modelFilterA]);
+
+    const filteredModelsB = useMemo(() => {
+        return visibleModelsB.filter((model) => modelMatchesQuery(model, modelFilterB));
+    }, [visibleModelsB, modelFilterB]);
+
+    const toolFilteredCountA = 0;
+
+    const toolFilteredCountB = 0;
+
+    const templateForm = useForm({
+        name: '',
+        description: '',
+        category: '',
+        is_public: false,
+        persona_a_id: data.persona_a_id,
+        persona_b_id: data.persona_b_id,
+        starter_message: data.starter_message,
+        max_rounds: data.max_rounds,
+    });
+
+    useEffect(() => {
+        fetch('/api/providers/configured', {
+            headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+        })
+            .then((r) => r.ok ? r.json() : null)
+            .then((d) => { if (d?.providers) { setConfiguredProviders(d.providers); } })
+            .catch(() => {});
+    }, []);
+
+    const fetchModels = async (provider, setModels, setLoading) => {
+        if (!provider) {
+            setModels([]);
+            return;
+        }
+
+        const baseProvider = provider.includes(':') ? provider.split(':')[0] : provider;
+
+        setLoading(true);
+        try {
+            const response = await fetch(`/api/providers/models?provider=${baseProvider}`, {
+                headers: {
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+            });
+
+            if (!response.ok) {
+                console.error(`HTTP error! status: ${response.status}`);
+                const errorText = await response.text();
+                console.error('Error response:', errorText);
+                setModels([]);
+                return;
+            }
+
+            const result = await response.json();
+            console.log(`Fetched models for ${provider}:`, result);
+            const models = result.models || [];
+            if (models.length === 0 && fallbackModelsByProvider[baseProvider]) {
+                console.warn(`No models returned for ${baseProvider}, using fallback list.`);
+                setModels(fallbackModelsByProvider[baseProvider]);
+            } else {
+                setModels(models);
+            }
+        } catch (error) {
+            console.error('Error fetching models:', error);
+            setModels(fallbackModelsByProvider[baseProvider] || []);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchModels(data.provider_a, setModelsA, setLoadingModelsA);
+    }, [data.provider_a]);
+
+    useEffect(() => {
+        fetchModels(data.provider_b, setModelsB, setLoadingModelsB);
+    }, [data.provider_b]);
+
+    useEffect(() => {
+        if (data.provider_a && !data.model_a && visibleModelsA.length > 0) {
+            setData('model_a', visibleModelsA[0].id);
+        }
+    }, [data.provider_a, data.model_a, visibleModelsA, setData]);
+
+    useEffect(() => {
+        const personaA = personas.find((persona) => persona.id === data.persona_a_id);
+        if (personaA) {
+            setData('temp_a', personaA.temperature ?? 0.7);
+        }
+    }, [data.persona_a_id, personas, setData]);
+
+    useEffect(() => {
+        if (data.provider_b && !data.model_b && visibleModelsB.length > 0) {
+            setData('model_b', visibleModelsB[0].id);
+        }
+    }, [data.provider_b, data.model_b, visibleModelsB, setData]);
+
+    useEffect(() => {
+        const personaB = personas.find((persona) => persona.id === data.persona_b_id);
+        if (personaB) {
+            setData('temp_b', personaB.temperature ?? 0.7);
+        }
+    }, [data.persona_b_id, personas, setData]);
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        post(route('chat.store'), {
+            forceFormData: true,
+            onError: () => {
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+        });
+    };
+
+    const hasStopWords = data.stop_words
+        .split(',')
+        .map((word) => word.trim())
+        .filter((word) => word.length > 0)
+        .length > 0;
+
+    const isValidRoundCount = Number.isInteger(Number(data.max_rounds)) && Number(data.max_rounds) >= 1 && Number(data.max_rounds) <= 500;
+    const isValidHistoryLimit = Number.isInteger(Number(data.memory_history_limit)) && Number(data.memory_history_limit) >= 1 && Number(data.memory_history_limit) <= 50;
+    const isValidRagSourceLimit = Number.isInteger(Number(data.memory_rag_source_limit)) && Number(data.memory_rag_source_limit) >= 1 && Number(data.memory_rag_source_limit) <= 20;
+    const isValidRagScoreThreshold = Number.isFinite(Number(data.memory_rag_score_threshold)) && Number(data.memory_rag_score_threshold) >= 0 && Number(data.memory_rag_score_threshold) <= 1;
+
+    const canSubmit = Boolean(
+        data.persona_a_id &&
+        data.persona_b_id &&
+        data.provider_a &&
+        data.provider_b &&
+        data.model_a &&
+        data.model_b &&
+        data.starter_message.trim().length > 0 &&
+        isValidRoundCount &&
+        isValidHistoryLimit &&
+        isValidRagSourceLimit &&
+        isValidRagScoreThreshold &&
+        (!data.stop_word_detection || (hasStopWords && data.stop_word_threshold >= 0.1 && data.stop_word_threshold <= 1))
+    );
+
+    const openTemplateModal = () => {
+        templateForm.setData({
+            name: '',
+            description: '',
+            category: '',
+            is_public: false,
+            persona_a_id: data.persona_a_id,
+            persona_b_id: data.persona_b_id,
+            starter_message: data.starter_message,
+            max_rounds: data.max_rounds,
+        });
+        setShowTemplateModal(true);
+    };
+
+    const handleSaveTemplate = (e) => {
+        e.preventDefault();
+        templateForm.post(route('templates.storeFromChat'), {
+            preserveState: true,
+            preserveScroll: true,
+            onSuccess: () => setShowTemplateModal(false),
+        });
+    };
+
+    return (
+        <AuthenticatedLayout>
+            <Head title="Create Session" />
+
+            <div className="relative min-h-screen text-zinc-100 p-4 md:p-8 overflow-hidden">
+                <div className="pointer-events-none absolute inset-0 -z-10">
+                    <div className="absolute -top-24 -left-24 h-96 w-96 rounded-full bg-[radial-gradient(circle_at_center,rgba(99,102,241,0.16),transparent_60%)] blur-2xl"></div>
+                    <div className="absolute top-20 right-[-8rem] h-[26rem] w-[26rem] rounded-full bg-[radial-gradient(circle_at_center,rgba(16,185,129,0.14),transparent_60%)] blur-2xl"></div>
+                    <div className="absolute bottom-[-10rem] left-1/3 h-[30rem] w-[30rem] rounded-full bg-[radial-gradient(circle_at_center,rgba(168,85,247,0.12),transparent_60%)] blur-2xl"></div>
+                </div>
+                <div className="max-w-6xl mx-auto">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-end pb-8 border-b border-white/5 gap-6 butter-reveal">
+                        <div>
+                            <Link href="/chat" className="text-xs font-mono text-zinc-500 hover:text-white mb-2 block uppercase tracking-wide">
+                                &larr; Back to Sessions
+                            </Link>
+                            <h1 className="text-3xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-zinc-400">
+                                Create Session
+                            </h1>
+                            <p className="text-zinc-500 text-sm mt-1">
+                                Configure both agents, prompt, and safety settings.
+                            </p>
+                        </div>
+                        <Link
+                            href="/chat"
+                            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-zinc-900/50 px-4 py-2 text-xs font-semibold text-zinc-300 transition-all hover:border-white/20 hover:bg-zinc-900/70 hover:text-white"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="m15 18-6-6 6-6"/>
+                            </svg>
+                            Back to Sessions
+                        </Link>
+                    </div>
+
+                    {flash?.success && (
+                        <div className="mt-6 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-5 py-3 text-sm text-emerald-300 butter-reveal">
+                            {flash.success}
+                        </div>
+                    )}
+                    {Object.keys(errors).length > 0 && (
+                        <div className="mt-6 rounded-xl border border-red-500/30 bg-red-500/10 px-5 py-3 text-sm text-red-300 butter-reveal">
+                            <p className="font-semibold">Please review the form errors and try again:</p>
+                            <ul className="mt-2 list-disc space-y-1 pl-5">
+                                {Object.entries(errors).map(([field, message]) => (
+                                    <li key={field}>
+                                        {message}
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+
+                    <form onSubmit={handleSubmit} className="space-y-8">
+                    {personas.length === 0 && (
+                        <div className="glass-panel glass-butter rounded-2xl border border-amber-400/30 bg-amber-500/10 p-5 text-amber-100 butter-reveal">
+                            <p className="text-sm font-semibold">No personas available yet.</p>
+                            <p className="mt-1 text-xs text-amber-200/80">Create at least two personas before starting a session.</p>
+                            <Link
+                                href={route('personas.create')}
+                                className="mt-3 inline-flex items-center gap-2 rounded-xl border border-amber-300/30 bg-amber-500/10 px-4 py-2 text-xs font-semibold text-amber-100 transition-all hover:bg-amber-500/20"
+                            >
+                                Create Persona
+                            </Link>
+                        </div>
+                    )}
+                    {template && (
+                        <div className="glass-panel glass-butter rounded-2xl p-5 border border-white/10 flex flex-col md:flex-row md:items-center md:justify-between gap-4 butter-reveal">
+                            <div>
+                                <p className="text-xs uppercase tracking-widest text-zinc-400">Template Loaded</p>
+                                <h3 className="text-lg font-semibold text-zinc-100">{template.name}</h3>
+                                {template.description && (
+                                    <p className="text-sm text-zinc-400 mt-1">{template.description}</p>
+                                )}
+                            </div>
+                            <Link
+                                href={route('templates.index')}
+                                className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-zinc-900/50 px-4 py-2 text-xs font-semibold text-zinc-300 transition-all hover:border-white/20 hover:bg-zinc-900/70 hover:text-white"
+                            >
+                                Browse Templates
+                            </Link>
+                        </div>
+                    )}
+
+                    {!template && (
+                        <div className="flex justify-end">
+                            <Link
+                                href={route('templates.index')}
+                                className="inline-flex items-center gap-2 rounded-xl border border-indigo-500/30 bg-indigo-500/10 px-4 py-2 text-xs font-semibold text-indigo-200 transition-all hover:bg-indigo-500/20"
+                            >
+                                Start from Template
+                            </Link>
+                        </div>
+                    )}
+                    {/* Agent Configuration Grid */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        {/* Agent A */}
+                        <div className="glass-panel glass-butter rounded-2xl p-6 space-y-4 butter-reveal">
+                            <h2 className="text-lg font-bold text-indigo-400 uppercase tracking-wider mb-4">Agent A</h2>
+
+                            <div className="space-y-2">
+                                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Persona</label>
+                                <select
+                                    value={data.persona_a_id}
+                                    onChange={e => setData('persona_a_id', e.target.value)}
+                                    className="w-full bg-zinc-900/50 border border-white/10 rounded-xl p-3 text-zinc-100 focus:ring-2 focus:ring-indigo-500/50 outline-none"
+                                >
+                                    <option value="">Select Persona...</option>
+                                    {personas.map(p => (
+                                        <option key={p.id} value={p.id}>{p.is_favorite ? `★ ${p.name}` : p.name}</option>
+                                    ))}
+                                </select>
+                                {errors.persona_a_id && <div className="text-red-400 text-sm">{errors.persona_a_id}</div>}
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Provider</label>
+                                <select
+                                    value={data.provider_a}
+                                    onChange={e => {
+                                        setData('provider_a', e.target.value);
+                                        setData('model_a', '');
+                                    }}
+                                    className="w-full bg-zinc-900/50 border border-white/10 rounded-xl p-3 text-zinc-100 focus:ring-2 focus:ring-indigo-500/50 outline-none"
+                                >
+                                    <option value="">Select Provider...</option>
+                                    {filteredProviders.map((p) => (
+                                        <option key={p.id} value={p.id}>{p.name}</option>
+                                    ))}
+                                </select>
+                                {errors.provider_a && <div className="text-red-400 text-sm">{errors.provider_a}</div>}
+                                {mcpEnabled && toolFilteredProviderCount > 0 && (
+                                    <p className="text-xs text-amber-500/80 ml-1">{toolFilteredProviderCount} provider{toolFilteredProviderCount > 1 ? 's' : ''} hidden — no tool support (MCP active)</p>
+                                )}
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Model</label>
+                                <input
+                                    type="text"
+                                    value={modelFilterA}
+                                    onChange={e => setModelFilterA(e.target.value)}
+                                    disabled={!data.provider_a || loadingModelsA}
+                                    placeholder="Filter models by name or ID..."
+                                    className="w-full bg-zinc-900/50 border border-white/10 rounded-xl p-3 text-zinc-100 placeholder:text-zinc-600 focus:ring-2 focus:ring-indigo-500/50 outline-none disabled:opacity-50"
+                                />
+                                <select
+                                    value={data.model_a}
+                                    onChange={e => setData('model_a', e.target.value)}
+                                    disabled={!data.provider_a || loadingModelsA}
+                                    className="w-full bg-zinc-900/50 border border-white/10 rounded-xl p-3 text-zinc-100 focus:ring-2 focus:ring-indigo-500/50 outline-none disabled:opacity-50"
+                                >
+                                    <option value="">{loadingModelsA ? 'Loading models...' : 'Select Model...'}</option>
+                                    {filteredModelsA.map(m => (
+                                        <option key={m.id} value={m.id}>
+                                            {m.name}{m.cost ? ` - ${m.cost}` : ''}
+                                        </option>
+                                    ))}
+                                </select>
+                                {errors.model_a && <div className="text-red-400 text-sm">{errors.model_a}</div>}
+                                <p className="text-xs text-zinc-600 ml-1">{filteredModelsA.length}/{visibleModelsA.length} models shown</p>
+                                {mcpEnabled && toolFilteredCountA > 0 && (
+                                    <p className="text-xs text-amber-500/80 ml-1">{toolFilteredCountA} hidden — no tool support (MCP active)</p>
+                                )}
+                                <p className="text-xs text-zinc-600 ml-1">Cost shown as input/output per 1M tokens</p>
+                            </div>
+
+                        </div>
+
+                        {/* Agent B */}
+                        <div className="glass-panel glass-butter rounded-2xl p-6 space-y-4 butter-reveal butter-reveal-delay-1">
+                            <h2 className="text-lg font-bold text-purple-400 uppercase tracking-wider mb-4">Agent B</h2>
+
+                            <div className="space-y-2">
+                                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Persona</label>
+                                <select
+                                    value={data.persona_b_id}
+                                    onChange={e => setData('persona_b_id', e.target.value)}
+                                    className="w-full bg-zinc-900/50 border border-white/10 rounded-xl p-3 text-zinc-100 focus:ring-2 focus:ring-purple-500/50 outline-none"
+                                >
+                                    <option value="">Select Persona...</option>
+                                    {personas.map(p => (
+                                        <option key={p.id} value={p.id}>{p.is_favorite ? `★ ${p.name}` : p.name}</option>
+                                    ))}
+                                </select>
+                                {errors.persona_b_id && <div className="text-red-400 text-sm">{errors.persona_b_id}</div>}
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Provider</label>
+                                <select
+                                    value={data.provider_b}
+                                    onChange={e => {
+                                        setData('provider_b', e.target.value);
+                                        setData('model_b', '');
+                                    }}
+                                    className="w-full bg-zinc-900/50 border border-white/10 rounded-xl p-3 text-zinc-100 focus:ring-2 focus:ring-purple-500/50 outline-none"
+                                >
+                                    <option value="">Select Provider...</option>
+                                    {filteredProviders.map((p) => (
+                                        <option key={p.id} value={p.id}>{p.name}</option>
+                                    ))}
+                                </select>
+                                {errors.provider_b && <div className="text-red-400 text-sm">{errors.provider_b}</div>}
+                                {mcpEnabled && toolFilteredProviderCount > 0 && (
+                                    <p className="text-xs text-amber-500/80 ml-1">{toolFilteredProviderCount} provider{toolFilteredProviderCount > 1 ? 's' : ''} hidden — no tool support (MCP active)</p>
+                                )}
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Model</label>
+                                <input
+                                    type="text"
+                                    value={modelFilterB}
+                                    onChange={e => setModelFilterB(e.target.value)}
+                                    disabled={!data.provider_b || loadingModelsB}
+                                    placeholder="Filter models by name or ID..."
+                                    className="w-full bg-zinc-900/50 border border-white/10 rounded-xl p-3 text-zinc-100 placeholder:text-zinc-600 focus:ring-2 focus:ring-purple-500/50 outline-none disabled:opacity-50"
+                                />
+                                <select
+                                    value={data.model_b}
+                                    onChange={e => setData('model_b', e.target.value)}
+                                    disabled={!data.provider_b || loadingModelsB}
+                                    className="w-full bg-zinc-900/50 border border-white/10 rounded-xl p-3 text-zinc-100 focus:ring-2 focus:ring-purple-500/50 outline-none disabled:opacity-50"
+                                >
+                                    <option value="">{loadingModelsB ? 'Loading models...' : 'Select Model...'}</option>
+                                    {filteredModelsB.map(m => (
+                                        <option key={m.id} value={m.id}>
+                                            {m.name}{m.cost ? ` - ${m.cost}` : ''}
+                                        </option>
+                                    ))}
+                                </select>
+                                {errors.model_b && <div className="text-red-400 text-sm">{errors.model_b}</div>}
+                                <p className="text-xs text-zinc-600 ml-1">{filteredModelsB.length}/{visibleModelsB.length} models shown</p>
+                                {mcpEnabled && toolFilteredCountB > 0 && (
+                                    <p className="text-xs text-amber-500/80 ml-1">{toolFilteredCountB} hidden — no tool support (MCP active)</p>
+                                )}
+                                <p className="text-xs text-zinc-600 ml-1">Cost shown as input/output per 1M tokens</p>
+                            </div>
+
+                        </div>
+                    </div>
+
+                    {/* Initial Prompt */}
+                    <div className="glass-panel glass-butter rounded-2xl p-6 space-y-2 butter-reveal butter-reveal-delay-2">
+                        <label className="text-xs font-bold uppercase tracking-wider text-emerald-400 ml-1">Starter Message</label>
+                        <textarea
+                            value={data.starter_message}
+                            onChange={e => setData('starter_message', e.target.value)}
+                            className="w-full bg-zinc-900/50 border border-white/10 rounded-xl p-4 text-zinc-100 focus:ring-2 focus:ring-emerald-500/50 outline-none min-h-[120px] resize-none"
+                            placeholder="Write the opening message that starts the conversation..."
+                        ></textarea>
+                        {errors.starter_message && <div className="text-red-400 text-sm">{errors.starter_message}</div>}
+                    </div>
+
+                    {/* Chat Control Settings */}
+                    <div className="glass-panel glass-butter rounded-2xl p-6 space-y-4 butter-reveal butter-reveal-delay-3">
+                        <h2 className="text-lg font-bold text-yellow-400 uppercase tracking-wider mb-4">Session Settings</h2>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div className="space-y-2">
+                                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Max Rounds</label>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    max="500"
+                                    value={data.max_rounds}
+                                    onChange={e => {
+                                        const value = e.target.value;
+                                        setData('max_rounds', value === '' ? '' : parseInt(value, 10));
+                                    }}
+                                    onBlur={() => {
+                                        if (!isValidRoundCount) {
+                                            setData('max_rounds', 10);
+                                        }
+                                    }}
+                                    className="w-full bg-zinc-900/50 border border-white/10 rounded-xl p-3 text-zinc-100 focus:ring-2 focus:ring-yellow-500/50 outline-none"
+                                />
+                                {errors.max_rounds && <div className="text-red-400 text-sm">{errors.max_rounds}</div>}
+                                <p className="text-xs text-zinc-600">Maximum number of conversation turns</p>
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Memory Window (Recent Messages)</label>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    max="50"
+                                    value={data.memory_history_limit}
+                                    onChange={e => {
+                                        const value = e.target.value;
+                                        setData('memory_history_limit', value === '' ? '' : parseInt(value, 10));
+                                    }}
+                                    onBlur={() => {
+                                        if (!isValidHistoryLimit) {
+                                            setData('memory_history_limit', 10);
+                                        }
+                                    }}
+                                    className="w-full bg-zinc-900/50 border border-white/10 rounded-xl p-3 text-zinc-100 focus:ring-2 focus:ring-yellow-500/50 outline-none"
+                                />
+                                {errors.memory_history_limit && <div className="text-red-400 text-sm">{errors.memory_history_limit}</div>}
+                                <p className="text-xs text-zinc-600">How many latest messages each agent keeps in-turn memory.</p>
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Memory Recall Depth</label>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    max="20"
+                                    value={data.memory_rag_source_limit}
+                                    onChange={e => {
+                                        const value = e.target.value;
+                                        setData('memory_rag_source_limit', value === '' ? '' : parseInt(value, 10));
+                                    }}
+                                    onBlur={() => {
+                                        if (!isValidRagSourceLimit) {
+                                            setData('memory_rag_source_limit', 6);
+                                        }
+                                    }}
+                                    className="w-full bg-zinc-900/50 border border-white/10 rounded-xl p-3 text-zinc-100 focus:ring-2 focus:ring-yellow-500/50 outline-none"
+                                />
+                                {errors.memory_rag_source_limit && <div className="text-red-400 text-sm">{errors.memory_rag_source_limit}</div>}
+                                <p className="text-xs text-zinc-600">Max retrieved memory snippets from prior chats.</p>
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">
+                                    Memory Similarity Threshold: {Number(data.memory_rag_score_threshold).toFixed(2)}
+                                </label>
+                                <input
+                                    type="range"
+                                    min="0"
+                                    max="1"
+                                    step="0.05"
+                                    value={data.memory_rag_score_threshold}
+                                    onChange={e => setData('memory_rag_score_threshold', parseFloat(e.target.value))}
+                                    className="w-full"
+                                />
+                                {errors.memory_rag_score_threshold && <div className="text-red-400 text-sm">{errors.memory_rag_score_threshold}</div>}
+                                <div className="flex justify-between text-xs text-zinc-600">
+                                    <span>Broader Recall</span>
+                                    <span>Stricter Match</span>
+                                </div>
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={data.memory_rag_enabled}
+                                        onChange={e => setData('memory_rag_enabled', e.target.checked)}
+                                        className="w-5 h-5 rounded bg-zinc-900/50 border-white/10"
+                                    />
+                                    <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">Enable Cross-Chat Memory</span>
+                                </label>
+                                <p className="text-xs text-zinc-600 ml-7">Use embedding retrieval from prior conversations as extra context.</p>
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={data.stop_word_detection}
+                                        onChange={e => setData('stop_word_detection', e.target.checked)}
+                                        className="w-5 h-5 rounded bg-zinc-900/50 border-white/10"
+                                    />
+                                    <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">Enable Stop Word Detection</span>
+                                </label>
+                                <p className="text-xs text-zinc-600 ml-7">Automatically stop when specific words are detected</p>
+                            </div>
+                        </div>
+
+                        {/* RAG File Attachments */}
+                        <div className="pt-4 border-t border-white/5 space-y-3">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">RAG Attachments</label>
+                                    <p className="text-xs text-zinc-600 ml-1 mt-0.5">Attach files to inject as context for this session (txt, md, pdf, doc, csv, json — max 10MB each)</p>
+                                </div>
+                                <label className="cursor-pointer flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-xs font-semibold hover:bg-yellow-500/20 transition-colors">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                                    Add Files
+                                    <input
+                                        type="file"
+                                        multiple
+                                        accept=".txt,.md,.pdf,.doc,.docx,.csv,.json"
+                                        className="hidden"
+                                        onChange={e => {
+                                            const newFiles = Array.from(e.target.files || []);
+                                            const combined = [...(data.rag_session_files || []), ...newFiles].slice(0, 10);
+                                            setData('rag_session_files', combined);
+                                            e.target.value = '';
+                                        }}
+                                    />
+                                </label>
+                            </div>
+
+                            {data.rag_session_files && data.rag_session_files.length > 0 && (
+                                <ul className="space-y-1.5">
+                                    {data.rag_session_files.map((file, index) => (
+                                        <li key={index} className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-zinc-900/50 border border-white/5">
+                                            <div className="flex items-center gap-2 min-w-0">
+                                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-yellow-400 shrink-0"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                                                <span className="text-xs text-zinc-300 truncate">{file.name}</span>
+                                                <span className="text-xs text-zinc-600 shrink-0">{(file.size / 1024).toFixed(0)} KB</span>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    const updated = data.rag_session_files.filter((_, i) => i !== index);
+                                                    setData('rag_session_files', updated);
+                                                }}
+                                                className="text-zinc-600 hover:text-red-400 transition-colors shrink-0"
+                                            >
+                                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                                            </button>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+
+                            {errors.rag_session_files && <div className="text-red-400 text-sm">{errors.rag_session_files}</div>}
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-white/5">
+                            <div className="space-y-2">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={data.notifications_enabled}
+                                        onChange={e => setData('notifications_enabled', e.target.checked)}
+                                        className="w-5 h-5 rounded bg-zinc-900/50 border-white/10"
+                                    />
+                                    <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">Email Notifications</span>
+                                </label>
+                                <p className="text-xs text-zinc-600 ml-7">Send email alerts when the conversation completes or fails</p>
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={data.discord_streaming_enabled}
+                                        onChange={e => setData('discord_streaming_enabled', e.target.checked)}
+                                        className="w-5 h-5 rounded bg-zinc-900/50 border-white/10"
+                                    />
+                                    <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">Discord Broadcast</span>
+                                </label>
+                                <p className="text-xs text-zinc-600 ml-7">Broadcast conversation updates to Discord when enabled.</p>
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={data.discourse_streaming_enabled}
+                                        onChange={e => setData('discourse_streaming_enabled', e.target.checked)}
+                                        className="w-5 h-5 rounded bg-zinc-900/50 border-white/10"
+                                    />
+                                    <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">Discourse Broadcast</span>
+                                </label>
+                                <p className="text-xs text-zinc-600 ml-7">Post live conversation updates into Discourse topics.</p>
+                            </div>
+                        </div>
+
+                        {data.discord_streaming_enabled && (
+                            <div className="pt-4 border-t border-white/5 space-y-2">
+                                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Discord Webhook URL (optional override)</label>
+                                <input
+                                    type="url"
+                                    value={data.discord_webhook_url}
+                                    onChange={e => setData('discord_webhook_url', e.target.value)}
+                                    placeholder="https://discord.com/api/webhooks/..."
+                                    className="w-full bg-zinc-900/50 border border-white/10 rounded-xl p-3 text-zinc-100 focus:ring-2 focus:ring-yellow-500/50 outline-none"
+                                />
+                                {errors.discord_webhook_url && <div className="text-red-400 text-sm">{errors.discord_webhook_url}</div>}
+                                <p className="text-xs text-zinc-600">Leave blank to use your profile default or system webhook.</p>
+                            </div>
+                        )}
+
+                        {data.discourse_streaming_enabled && (
+                            <div className="pt-4 border-t border-white/5 space-y-2">
+                                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Discourse Topic ID (optional)</label>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    value={data.discourse_topic_id}
+                                    onChange={e => setData('discourse_topic_id', e.target.value)}
+                                    placeholder="123"
+                                    className="w-full bg-zinc-900/50 border border-white/10 rounded-xl p-3 text-zinc-100 focus:ring-2 focus:ring-yellow-500/50 outline-none"
+                                />
+                                {errors.discourse_topic_id && <div className="text-red-400 text-sm">{errors.discourse_topic_id}</div>}
+                                <p className="text-xs text-zinc-600">Leave blank to create a new topic automatically.</p>
+                            </div>
+                        )}
+
+                        {data.stop_word_detection && (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-white/5">
+                                <div className="space-y-2">
+                                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Stop Words (comma separated)</label>
+                                    <input
+                                        type="text"
+                                        value={data.stop_words}
+                                        onChange={e => setData('stop_words', e.target.value)}
+                                        placeholder="goodbye, farewell, end"
+                                        className="w-full bg-zinc-900/50 border border-white/10 rounded-xl p-3 text-zinc-100 focus:ring-2 focus:ring-yellow-500/50 outline-none"
+                                    />
+                                    {errors.stop_words && <div className="text-red-400 text-sm">{errors.stop_words}</div>}
+                                </div>
+
+                                <div className="space-y-2">
+                                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Detection Threshold: {data.stop_word_threshold}</label>
+                                    <input
+                                        type="range"
+                                        min="0.1"
+                                        max="1"
+                                        step="0.1"
+                                        value={data.stop_word_threshold}
+                                        onChange={e => setData('stop_word_threshold', parseFloat(e.target.value))}
+                                        className="w-full"
+                                    />
+                                    {errors.stop_word_threshold && <div className="text-red-400 text-sm">{errors.stop_word_threshold}</div>}
+                                    <div className="flex justify-between text-xs text-zinc-600">
+                                        <span>Loose</span>
+                                        <span>Strict</span>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Submit Buttons */}
+                    <div className="pt-4 flex flex-col gap-3">
+                        <button
+                            type="submit"
+                            disabled={processing || !canSubmit}
+                            className="w-full group relative bg-white text-black rounded-xl py-4 font-bold overflow-hidden transition-all hover:scale-[1.01] hover:shadow-[0_0_40px_rgba(255,255,255,0.2)] disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            <div className="absolute inset-0 bg-gradient-to-r from-indigo-500 via-purple-500 to-indigo-500 opacity-20 group-hover:opacity-40 transition-opacity"></div>
+                            <span className="relative flex items-center justify-center gap-2">
+                                {processing ? (
+                                    <>
+                                        <svg className="animate-spin h-5 w-5 text-black" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                        Creating session...
+                                    </>
+                                ) : (
+                                    <>
+                                        Start Session
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                                    </>
+                                )}
+                            </span>
+                        </button>
+                        {!canSubmit && (
+                            <p className="text-xs text-zinc-500 text-center">
+                                Complete persona, provider, model, prompt, and round settings to start.
+                            </p>
+                        )}
+
+                        <button
+                            type="button"
+                            onClick={openTemplateModal}
+                            className="w-full rounded-xl border border-white/10 bg-zinc-900/50 py-3 text-sm font-semibold text-zinc-300 transition-all hover:border-white/20 hover:bg-zinc-900/70 hover:text-white"
+                        >
+                            Save as Template
+                        </button>
+                    </div>
+                    </form>
+                </div>
+            </div>
+
+            <Modal show={showTemplateModal} onClose={() => setShowTemplateModal(false)} maxWidth="md">
+                <form onSubmit={handleSaveTemplate} className="p-6 space-y-5">
+                    <h2 className="text-lg font-bold text-zinc-100">Save as Template</h2>
+
+                    <div className="space-y-2">
+                        <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Name <span className="text-red-400">*</span></label>
+                        <input
+                            type="text"
+                            value={templateForm.data.name}
+                            onChange={e => templateForm.setData('name', e.target.value)}
+                            className="w-full rounded-xl border border-white/10 bg-zinc-900/80 p-3 text-zinc-100 focus:ring-2 focus:ring-indigo-500/50 outline-none"
+                            placeholder="Template name..."
+                        />
+                        {templateForm.errors.name && <div className="text-red-400 text-sm">{templateForm.errors.name}</div>}
+                    </div>
+
+                    <div className="space-y-2">
+                        <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Description</label>
+                        <textarea
+                            value={templateForm.data.description}
+                            onChange={e => templateForm.setData('description', e.target.value)}
+                            className="w-full rounded-xl border border-white/10 bg-zinc-900/80 p-3 text-zinc-100 focus:ring-2 focus:ring-indigo-500/50 outline-none resize-none"
+                            rows={3}
+                            placeholder="Optional description..."
+                        />
+                        {templateForm.errors.description && <div className="text-red-400 text-sm">{templateForm.errors.description}</div>}
+                    </div>
+
+                    <div className="space-y-2">
+                        <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Category</label>
+                        <input
+                            type="text"
+                            value={templateForm.data.category}
+                            onChange={e => templateForm.setData('category', e.target.value)}
+                            className="w-full rounded-xl border border-white/10 bg-zinc-900/80 p-3 text-zinc-100 focus:ring-2 focus:ring-indigo-500/50 outline-none"
+                            placeholder="e.g. Debate, Interview..."
+                        />
+                        {templateForm.errors.category && <div className="text-red-400 text-sm">{templateForm.errors.category}</div>}
+                    </div>
+
+                    <div>
+                        <label className="flex items-center gap-3 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={templateForm.data.is_public}
+                                onChange={e => templateForm.setData('is_public', e.target.checked)}
+                                className="w-5 h-5 rounded bg-zinc-900/50 border-white/10"
+                            />
+                            <span className="text-sm text-zinc-300">Make this template public</span>
+                        </label>
+                    </div>
+
+                    <div className="flex justify-end gap-3 pt-2">
+                        <button
+                            type="button"
+                            onClick={() => setShowTemplateModal(false)}
+                            className="rounded-xl border border-white/10 bg-zinc-900/50 px-5 py-2 text-sm font-semibold text-zinc-300 transition-all hover:bg-zinc-900/70 hover:text-white"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            type="submit"
+                            disabled={templateForm.processing}
+                            className="rounded-xl bg-indigo-600 px-5 py-2 text-sm font-semibold text-white transition-all hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {templateForm.processing ? 'Saving...' : 'Save Template'}
+                        </button>
+                    </div>
+                </form>
+            </Modal>
+        </AuthenticatedLayout>
+    );
+}

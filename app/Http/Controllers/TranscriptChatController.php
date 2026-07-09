@@ -1,0 +1,390 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Http\Requests\TranscriptChatRequest;
+use App\Models\ApiKey;
+use App\Models\Conversation;
+use App\Services\AI\EmbeddingService;
+use App\Services\RagService;
+use Illuminate\Http\Client\Response;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use Inertia\Inertia;
+use Inertia\Response as InertiaResponse;
+
+class TranscriptChatController extends Controller
+{
+    public function __construct(
+        protected RagService $ragService,
+        protected EmbeddingService $embeddingService
+    ) {}
+
+    public function index(): InertiaResponse
+    {
+        $conversations = auth()->user()
+            ->conversations()
+            ->with(['personaA:id,name', 'personaB:id,name'])
+            ->latest()
+            ->limit(50)
+            ->get(['id', 'persona_a_id', 'persona_b_id', 'created_at', 'status']);
+
+        return Inertia::render('Chat/TranscriptChat', [
+            'conversations' => $conversations,
+        ]);
+    }
+
+    public function ask(TranscriptChatRequest $request): JsonResponse
+    {
+        $question = $request->validated('question');
+        $conversationId = $request->validated('conversation_id');
+        $settings = [
+            'system_prompt' => $request->validated('system_prompt'),
+            'model' => $request->validated('model') ?? 'gpt-4o-mini',
+            'temperature' => $request->validated('temperature') ?? 0.3,
+            'max_tokens' => $request->validated('max_tokens') ?? 1024,
+            'source_limit' => $request->validated('source_limit') ?? 6,
+            'score_threshold' => $request->validated('score_threshold') ?? 0.3,
+        ];
+
+        $context = $this->retrieveRelevantContext($question, $conversationId, $settings);
+
+        if ($context->isEmpty()) {
+            return response()->json([
+                'answer' => 'I could not find any relevant transcript content to answer your question. Try asking something more specific to your chat history.',
+                'sources' => [],
+            ]);
+        }
+
+        $answer = $this->generateAnswer($question, $context, $settings);
+
+        $sources = $context->map(fn ($message) => [
+            'id' => $message->id,
+            'content' => $this->truncate($message->content, 200),
+            'role' => $message->role,
+            'score' => round($message->similarity_score ?? 0, 3),
+            'created_at' => $message->created_at->diffForHumans(),
+            'conversation_id' => $message->conversation_id,
+            'persona_name' => $message->persona?->name,
+        ])->values();
+
+        return response()->json([
+            'answer' => $answer,
+            'sources' => $sources,
+        ]);
+    }
+
+    /**
+     * Retrieve semantically similar messages from transcripts.
+     *
+     * @param  array<string, mixed>  $settings
+     */
+    protected function retrieveRelevantContext(string $question, ?string $conversationId, array $settings = []): \Illuminate\Support\Collection
+    {
+        $filter = ['user_id' => auth()->id()];
+
+        if ($conversationId) {
+            $conversation = Conversation::where('id', $conversationId)
+                ->where('user_id', auth()->id())
+                ->first();
+
+            if ($conversation) {
+                $filter['conversation_id'] = $conversationId;
+            }
+        }
+
+        return $this->ragService->searchSimilarMessages(
+            query: $question,
+            limit: (int) ($settings['source_limit'] ?? 6),
+            filter: $filter,
+            scoreThreshold: (float) ($settings['score_threshold'] ?? 0.65)
+        );
+    }
+
+    /**
+     * Resolve the OpenAI API key, preferring the authenticated user's stored key
+     * before falling back to the global config value.
+     */
+    protected function resolveOpenAiKey(): ?string
+    {
+        $userId = auth()->id();
+
+        if ($userId) {
+            $dbKey = ApiKey::where('provider', 'openai')
+                ->where('user_id', $userId)
+                ->where('is_active', true)
+                ->latest()
+                ->value('key');
+
+            if (! empty($dbKey)) {
+                return $dbKey;
+            }
+        }
+
+        return config('services.openai.key') ?: null;
+    }
+
+    /**
+     * Resolve the OpenRouter API key: user's key → any active DB key → config.
+     */
+    protected function resolveOpenRouterKey(): ?string
+    {
+        $userId = auth()->id();
+
+        if ($userId) {
+            $dbKey = ApiKey::where('provider', 'openrouter')
+                ->where('user_id', $userId)
+                ->where('is_active', true)
+                ->latest()
+                ->value('key');
+
+            if (! empty($dbKey)) {
+                return $dbKey;
+            }
+        }
+
+        // Fall back to any active OpenRouter key in the database
+        $fallbackKey = ApiKey::where('provider', 'openrouter')
+            ->where('is_active', true)
+            ->latest()
+            ->value('key');
+
+        if (! empty($fallbackKey)) {
+            return $fallbackKey;
+        }
+
+        return config('services.openrouter.key') ?: null;
+    }
+
+    /**
+     * Generate an AI answer using OpenAI with OpenRouter fallback when quota is exhausted.
+     *
+     * @param  array<string, mixed>  $settings
+     */
+    protected function generateAnswer(string $question, \Illuminate\Support\Collection $context, array $settings = []): string
+    {
+        $apiKey = $this->resolveOpenAiKey();
+
+        if (empty($apiKey)) {
+            return 'OpenAI API key is not configured. Please add your OpenAI key in API Keys.';
+        }
+
+        $contextText = $context->map(function ($message) {
+            $speaker = $message->persona?->name ?? ucfirst($message->role);
+            $time = $message->created_at->diffForHumans();
+
+            return "[{$time}] {$speaker}: {$message->content}";
+        })->implode("\n\n");
+
+        $defaultSystemPrompt = <<<'PROMPT'
+You are a helpful assistant that answers questions about AI chat transcript archives.
+You have been given relevant excerpts from past conversations retrieved via semantic search.
+Use ONLY the provided transcript context to answer the question.
+If the context does not contain enough information, say so clearly.
+Be concise and accurate. Quote specific parts of the transcript when helpful.
+PROMPT;
+
+        $systemPrompt = ! empty($settings['system_prompt'])
+            ? $settings['system_prompt']
+            : $defaultSystemPrompt;
+
+        $userMessage = <<<MSG
+Relevant transcript excerpts:
+{$contextText}
+
+---
+Question: {$question}
+MSG;
+
+        try {
+            $response = Http::withToken($apiKey)
+                ->timeout(30)
+                ->post('https://api.openai.com/v1/chat/completions', [
+                    'model' => $settings['model'] ?? config('services.openai.model', 'gpt-4o-mini'),
+                    'messages' => [
+                        ['role' => 'system', 'content' => $systemPrompt],
+                        ['role' => 'user', 'content' => $userMessage],
+                    ],
+                    'temperature' => (float) ($settings['temperature'] ?? 0.3),
+                    'max_tokens' => (int) ($settings['max_tokens'] ?? 1024),
+                ]);
+
+            if ($response->successful()) {
+                return $response->json('choices.0.message.content', 'No answer could be generated.');
+            }
+
+            $logLevel = $this->shouldAttemptOpenRouterFallback($response) ? 'warning' : 'error';
+            Log::$logLevel('TranscriptChat OpenAI error', [
+                'status' => $response->status(),
+                'response' => $response->body(),
+            ]);
+
+            if ($this->shouldAttemptOpenRouterFallback($response)) {
+                $openRouterKey = $this->resolveOpenRouterKey();
+
+                if (empty($openRouterKey)) {
+                    if ($this->shouldFallbackToOpenRouter($response)) {
+                        return 'OpenAI credits are exhausted and no OpenRouter API key is configured. Please add an OpenRouter key in API Keys.';
+                    }
+
+                    return $this->messageForFailedResponse(
+                        $response,
+                        'OpenAI request failed and no OpenRouter API key is configured.'
+                    );
+                }
+
+                try {
+                    $fallbackResponse = Http::withToken($openRouterKey)
+                        ->withHeaders([
+                            'HTTP-Referer' => (string) config('services.openrouter.referer'),
+                            'X-Title' => (string) config('services.openrouter.app_name'),
+                        ])
+                        ->timeout(30)
+                        ->post('https://openrouter.ai/api/v1/chat/completions', [
+                            'model' => $this->toOpenRouterModel((string) ($settings['model'] ?? config('services.openai.model', 'gpt-4o-mini'))),
+                            'messages' => [
+                                ['role' => 'system', 'content' => $systemPrompt],
+                                ['role' => 'user', 'content' => $userMessage],
+                            ],
+                            'temperature' => (float) ($settings['temperature'] ?? 0.3),
+                            'max_tokens' => (int) ($settings['max_tokens'] ?? 1024),
+                        ]);
+
+                    if ($fallbackResponse->successful()) {
+                        return $fallbackResponse->json('choices.0.message.content', 'No answer could be generated.');
+                    }
+
+                    Log::error('TranscriptChat OpenRouter fallback error', [
+                        'status' => $fallbackResponse->status(),
+                        'response' => $fallbackResponse->body(),
+                    ]);
+
+                    return $this->messageForFailedResponse(
+                        $fallbackResponse,
+                        'OpenRouter fallback failed after OpenAI quota exhaustion.'
+                    );
+                } catch (\Throwable $fallbackException) {
+                    Log::error('TranscriptChat OpenRouter fallback exception', [
+                        'error' => $fallbackException->getMessage(),
+                    ]);
+
+                    return $this->messageForFailedResponse(
+                        $response,
+                        'OpenAI request failed and OpenRouter fallback could not be reached.'
+                    );
+                }
+            }
+
+            return $this->messageForFailedResponse(
+                $response,
+                'An error occurred while generating the answer. Please try again.'
+            );
+        } catch (\Exception $e) {
+            Log::error('TranscriptChat exception', ['error' => $e->getMessage()]);
+
+            return 'An unexpected error occurred. Please try again.';
+        }
+    }
+
+    protected function shouldFallbackToOpenRouter(Response $response): bool
+    {
+        if ($response->status() === 429) {
+            return true;
+        }
+
+        $body = strtolower($response->body());
+        $patterns = [
+            'insufficient_quota',
+            'exceeded your current quota',
+            'billing_hard_limit_reached',
+            'billing hard limit',
+            'credit balance is too low',
+            'not enough credits',
+            'quota exceeded',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (str_contains($body, $pattern)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    protected function shouldAttemptOpenRouterFallback(Response $response): bool
+    {
+        return $this->shouldFallbackToOpenRouter($response)
+            || $response->unauthorized()
+            || $response->forbidden()
+            || $response->serverError();
+    }
+
+    protected function toOpenRouterModel(string $openAiModel): string
+    {
+        if (str_contains($openAiModel, '/')) {
+            return $openAiModel;
+        }
+
+        return 'openai/'.$openAiModel;
+    }
+
+    protected function messageForFailedResponse(Response $response, string $default): string
+    {
+        $message = $this->extractApiErrorMessage($response);
+        $messageLower = strtolower($message);
+
+        if (
+            $response->unauthorized()
+            || str_contains($messageLower, 'unauthorized')
+            || str_contains($messageLower, 'invalid api key')
+        ) {
+            return 'API authentication failed. Please verify your OpenAI API key.';
+        }
+
+        if ($this->shouldFallbackToOpenRouter($response)) {
+            return 'OpenAI credits appear exhausted. Please top up billing or configure OpenRouter fallback.';
+        }
+
+        if ($message !== '') {
+            return 'Provider error: '.$message;
+        }
+
+        if ($response->failed()) {
+            return 'Provider request failed with status '.$response->status().'. Please try again or switch model/provider settings.';
+        }
+
+        return $default;
+    }
+
+    protected function extractApiErrorMessage(Response $response): string
+    {
+        $errorPayload = $response->json('error');
+
+        if (is_string($errorPayload) && trim($errorPayload) !== '') {
+            return trim($errorPayload);
+        }
+
+        if (is_array($errorPayload)) {
+            $message = trim((string) ($errorPayload['message'] ?? ''));
+            if ($message !== '') {
+                return $message;
+            }
+
+            $code = trim((string) ($errorPayload['code'] ?? ''));
+            if ($code !== '') {
+                return $code;
+            }
+        }
+
+        return '';
+    }
+
+    protected function truncate(string $text, int $limit): string
+    {
+        return mb_strlen($text) > $limit
+            ? mb_substr($text, 0, $limit).'…'
+            : $text;
+    }
+}
