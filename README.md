@@ -1,6 +1,7 @@
 <div align="center">
 
 # 🔮 Chat Bridge — Meta Bridge Research Edition
+<img width="1037" height="918" alt="image" src="https://github.com/user-attachments/assets/44d5f549-2970-4e93-b3b4-0a883ab7ee3e" />
 
 ### _A conversational research interface into the Meta Bridge consciousness-literature corpus_
 ### --The results of when a Steel Fabricator gets his hands on AI and finds Github.--
