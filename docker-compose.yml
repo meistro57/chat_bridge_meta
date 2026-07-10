@@ -7,7 +7,7 @@ services:
       args:
         APP_UID: ${LOCAL_UID:-1000}
         APP_GID: ${LOCAL_GID:-1000}
-    container_name: chatbridge-app
+    container_name: meta-chatbridge-app
     restart: unless-stopped
     working_dir: /var/www/html
     volumes:
@@ -66,7 +66,7 @@ services:
       args:
         APP_UID: ${LOCAL_UID:-1000}
         APP_GID: ${LOCAL_GID:-1000}
-    container_name: chatbridge-queue
+    container_name: meta-chatbridge-queue
     restart: unless-stopped
     working_dir: /var/www/html
     command: sh -c "mkdir -p /var/log/supervisor && /usr/bin/supervisord -c /var/www/html/docker/supervisor/queue-workers.conf"
@@ -118,7 +118,7 @@ services:
       args:
         APP_UID: ${LOCAL_UID:-1000}
         APP_GID: ${LOCAL_GID:-1000}
-    container_name: chatbridge-reverb
+    container_name: meta-chatbridge-reverb
     restart: unless-stopped
     working_dir: /var/www/html
     command: php artisan reverb:start --host=0.0.0.0 --port=8080
@@ -167,7 +167,7 @@ services:
   # PostgreSQL Database
   postgres:
     image: postgres:16-alpine
-    container_name: chatbridge-postgres
+    container_name: meta-chatbridge-postgres
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     restart: unless-stopped
     environment:
@@ -189,7 +189,7 @@ services:
   # Redis for Caching and Queue
   redis:
     image: redis:7-alpine
-    container_name: chatbridge-redis
+    container_name: meta-chatbridge-redis
     restart: unless-stopped
     command: redis-server --appendonly yes
     volumes:
@@ -207,7 +207,7 @@ services:
   # Qdrant Vector Database for RAG
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: chatbridge-qdrant
+    container_name: meta-chatbridge-qdrant
     restart: unless-stopped
     volumes:
       - qdrant-data:/qdrant/storage
