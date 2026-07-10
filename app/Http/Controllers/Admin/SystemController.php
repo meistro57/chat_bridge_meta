@@ -752,7 +752,7 @@ class SystemController extends Controller
     private function updateLaravelFramework(): string
     {
         $output = [];
-        $output[] = 'Updating Laravel framework (laravel/framework)...';
+        $output[] = 'Upgrading Laravel framework to v13 (laravel/framework:^13.0)...';
 
         if (app()->environment('testing') || app()->runningUnitTests()) {
             $output[] = '→ Skipped in testing environment.';
@@ -768,7 +768,7 @@ class SystemController extends Controller
         }
 
         $process = new Process(
-            ['composer', 'update', 'laravel/framework', '--with-all-dependencies', '--no-interaction'],
+            ['composer', 'require', 'laravel/framework:^13.0', '--with-all-dependencies', '--no-interaction'],
             base_path(),
             null,
             null,
@@ -781,12 +781,12 @@ class SystemController extends Controller
             $output[] = $combinedOutput !== '' ? $combinedOutput : 'No Composer output.';
 
             if ($process->isSuccessful()) {
-                $output[] = '✓ Laravel framework update completed.';
+                $output[] = '✓ Laravel framework upgrade to v13 completed.';
             } else {
-                $output[] = '✗ Laravel framework update failed.';
+                $output[] = '✗ Laravel framework upgrade to v13 failed.';
             }
         } catch (\Throwable $e) {
-            $output[] = '✗ Laravel framework update failed: '.$e->getMessage();
+            $output[] = '✗ Laravel framework upgrade to v13 failed: '.$e->getMessage();
         }
 
         return implode("\n", $output);

@@ -224,8 +224,8 @@
    - Result reporting
 
 9. **Update Laravel** ⬆️
-   - Runs `composer update laravel/framework --with-all-dependencies`
-   - No-interaction safe execution
+   - Runs `composer require laravel/framework:^13.0 --with-all-dependencies --no-interaction`
+   - Targets Laravel 13 upgrade flow
    - Full command output in diagnostics console
    - Skips in testing environment
 

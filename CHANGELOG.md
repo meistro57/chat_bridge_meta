@@ -353,7 +353,8 @@ All notable changes to Chat Bridge will be documented in this file.
 
 ### 🧰 **Admin & Diagnostics**
 - Added new System Diagnostics action: **Update Laravel**
-  - Runs `composer update laravel/framework --with-all-dependencies --no-interaction`
+  - Runs `composer require laravel/framework:^13.0 --with-all-dependencies --no-interaction`
+  - Targets Laravel 13 upgrade flow
   - Skips execution in `testing` environment
 
 ---

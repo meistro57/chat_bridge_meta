@@ -78,11 +78,11 @@ class SystemDiagnosticsTest extends TestCase
         $output = $response->json('output');
         // dump($output);
         $this->assertIsString($output);
-        $this->assertStringContainsString('Updating Laravel framework', $output);
+        $this->assertStringContainsString('Upgrading Laravel framework to v13', $output);
         $this->assertTrue(
             str_contains($output, 'Skipped in testing environment') ||
-            str_contains($output, 'Laravel framework update completed') ||
-            str_contains($output, 'Laravel framework update failed.'),
+            str_contains($output, 'Laravel framework upgrade to v13 completed') ||
+            str_contains($output, 'Laravel framework upgrade to v13 failed.'),
             'Output did not indicate skip, success, or handled failure: '.$output
         );
     }
