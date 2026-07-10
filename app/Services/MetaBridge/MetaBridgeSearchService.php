@@ -4,6 +4,7 @@ namespace App\Services\MetaBridge;
 
 use App\Services\AI\EmbeddingService;
 use App\Services\Qdrant\QdrantConnector;
+use App\Services\Qdrant\Requests\ScrollPointsRequest;
 use App\Services\Qdrant\Requests\SearchPointsRequest;
 use Illuminate\Support\Facades\Log;
 
@@ -109,6 +110,110 @@ class MetaBridgeSearchService
             scoreThreshold: $scoreThreshold,
             vectorName: (string) config('services.meta_bridge.misfit_reports_vector', 'summary_vec'),
         );
+    }
+
+    /**
+     * Search Vectoreologist's topology findings (clusters, bridges, moats,
+     * anomalies) mined from meta-bridge Qdrant collections.
+     *
+     * Unlike the collections above, vectoreology_findings stores vectors as a
+     * dim-1 placeholder — it was never meant to be embedding-searched. So this
+     * filters by payload (type / is_anomaly / min confidence) via Qdrant scroll,
+     * then does an in-memory case-insensitive match of $query against the
+     * `subject` and `reasoning_chain` payload fields. Pass an empty $query to
+     * skip keyword filtering and just browse by type/anomaly/confidence.
+     *
+     * @param  string  $query  Keyword to match against subject/reasoning_chain (empty = no keyword filter)
+     * @param  string|null  $type  Filter by finding type, e.g. 'cluster_analysis', 'density_anomaly'
+     * @param  bool|null  $isAnomaly  Filter to anomaly-flagged findings only (true) or non-anomalies (false)
+     * @param  float|null  $minConfidence  Minimum confidence score (0-1)
+     * @return array<int, array{score: null, payload: array<string, mixed>}>
+     */
+    public function searchVectoreologyFindings(
+        string $query = '',
+        int $limit = 10,
+        ?string $type = null,
+        ?bool $isAnomaly = null,
+        ?float $minConfidence = null,
+    ): array {
+        $collection = (string) config('services.meta_bridge.collection_vectoreology_findings', 'vectoreology_findings');
+
+        $must = [];
+
+        if ($type !== null) {
+            $must[] = ['key' => 'type', 'match' => ['value' => $type]];
+        }
+        if ($isAnomaly !== null) {
+            $must[] = ['key' => 'is_anomaly', 'match' => ['value' => $isAnomaly]];
+        }
+        if ($minConfidence !== null) {
+            $must[] = ['key' => 'confidence', 'range' => ['gte' => $minConfidence]];
+        }
+
+        $filter = $must === [] ? null : ['must' => $must];
+
+        try {
+            $response = $this->qdrant->send(
+                new ScrollPointsRequest(
+                    collectionName: $collection,
+                    // Pull a wider batch than $limit since keyword matching happens
+                    // client-side after this; Qdrant itself can't text-search these fields.
+                    limit: max($limit * 10, 200),
+                    filter: $filter,
+                )
+            );
+
+            if (! $response->successful()) {
+                Log::warning('Vectoreology findings scroll failed', [
+                    'collection' => $collection,
+                    'status' => $response->status(),
+                    'body' => $response->body(),
+                ]);
+
+                return [];
+            }
+
+            $points = $response->json('result.points', []);
+
+            if (! is_array($points)) {
+                return [];
+            }
+
+            $needle = trim(mb_strtolower($query));
+
+            $matches = array_values(array_filter(
+                array_map(
+                    static fn (array $point): array => is_array($point['payload'] ?? null) ? $point['payload'] : [],
+                    array_filter($points, static fn ($point): bool => is_array($point))
+                ),
+                function (array $payload) use ($needle): bool {
+                    if ($needle === '') {
+                        return true;
+                    }
+
+                    $haystack = mb_strtolower(
+                        (string) ($payload['subject'] ?? '').' '.(string) ($payload['reasoning_chain'] ?? '')
+                    );
+
+                    return str_contains($haystack, $needle);
+                }
+            ));
+
+            // Higher-confidence findings first among matches.
+            usort($matches, static fn (array $a, array $b): int => ($b['confidence'] ?? 0) <=> ($a['confidence'] ?? 0));
+
+            return array_map(
+                static fn (array $payload): array => ['score' => null, 'payload' => $payload],
+                array_slice($matches, 0, $limit)
+            );
+        } catch (\Throwable $exception) {
+            Log::warning('Vectoreology findings search threw an exception', [
+                'collection' => $collection,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return [];
+        }
     }
 
     /**

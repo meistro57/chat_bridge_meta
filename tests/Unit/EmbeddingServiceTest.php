@@ -17,8 +17,8 @@ class EmbeddingServiceTest extends TestCase
         $service = new EmbeddingService;
         $embedding = $service->getEmbedding('hello world');
 
-        $this->assertCount(1536, $embedding);
-        $this->assertSame(array_fill(0, 1536, 0.0), $embedding);
+        $this->assertCount(3072, $embedding);
+        $this->assertSame(array_fill(0, 3072, 0.0), $embedding);
     }
 
     public function test_it_uses_openrouter_gemini_embeddings_when_configured(): void

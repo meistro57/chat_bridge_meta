@@ -132,6 +132,13 @@ return [
         'reflection_vector' => env('MB_QDRANT_REFLECTION_VECTOR', 'summary_vec'),
         'misfit_reports_vector' => env('MB_QDRANT_MISFIT_REPORTS_VECTOR', 'summary_vec'),
         'score_threshold' => (float) env('MB_QDRANT_SCORE_THRESHOLD', 0.5),
+
+        // Vectoreologist's findings collection. NOTE: this collection uses a
+        // placeholder dim-1 vector (not a real embedding), so it is NOT
+        // semantically searchable like the collections above. It's queried by
+        // payload filter (type, is_anomaly, confidence) + in-memory keyword
+        // match on subject/reasoning_chain instead. See searchVectoreologyFindings().
+        'collection_vectoreology_findings' => env('MB_QDRANT_COLLECTION_VECTOREOLOGY_FINDINGS', 'vectoreology_findings'),
     ],
 
     'chat_bridge' => [

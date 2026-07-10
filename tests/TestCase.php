@@ -45,7 +45,7 @@ abstract class TestCase extends BaseTestCase
     /**
      * @return array<string, string>
      */
-    private function testing_environment_variables(): array
+    private function testingEnvironmentVariables(): array
     {
         return [
             'APP_ENV' => 'testing',

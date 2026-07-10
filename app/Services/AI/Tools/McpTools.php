@@ -265,8 +265,8 @@ class McpTools
                     ],
                     'collection' => [
                         'type' => 'string',
-                        'description' => "Which slice of the corpus to search: 'claims' (distilled canonical statements, default), 'chunks' (raw source-text excerpts), 'sources' (book/source metadata), 'reflections' (synthesized cross-source findings), or 'misfit_reports' (MisfitCrew's synthesized cross-source pattern reports)",
-                        'enum' => ['claims', 'chunks', 'sources', 'reflections', 'misfit_reports'],
+                        'description' => "Which slice of the corpus to search: 'claims' (distilled canonical statements, default), 'chunks' (raw source-text excerpts), 'sources' (book/source metadata), 'reflections' (synthesized cross-source findings), 'misfit_reports' (MisfitCrew's synthesized cross-source pattern reports), or 'vectoreology_findings' (Vectoreologist's topology findings — clusters, bridges, moats, anomalies)",
+                        'enum' => ['claims', 'chunks', 'sources', 'reflections', 'misfit_reports', 'vectoreology_findings'],
                         'default' => 'claims',
                     ],
                     'limit' => [
@@ -292,6 +292,7 @@ class McpTools
                     'sources' => $this->metaBridgeSearch->searchSources($query, $limit),
                     'reflections' => $this->metaBridgeSearch->searchReflections($query, $limit),
                     'misfit_reports' => $this->metaBridgeSearch->searchMisfitReports($query, $limit),
+                    'vectoreology_findings' => $this->metaBridgeSearch->searchVectoreologyFindings($query, $limit),
                     default => $this->metaBridgeSearch->searchClaims($query, $limit),
                 };
 

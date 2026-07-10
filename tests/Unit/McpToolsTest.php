@@ -141,6 +141,28 @@ class McpToolsTest extends TestCase
         $this->assertSame([], $result['results']);
     }
 
+    public function test_search_meta_bridge_routes_vectoreology_findings_collection(): void
+    {
+        $metaBridgeSearch = Mockery::mock(MetaBridgeSearchService::class);
+        $metaBridgeSearch->shouldReceive('searchVectoreologyFindings')
+            ->once()
+            ->with('density anomaly', 5)
+            ->andReturn([
+                ['score' => null, 'payload' => ['subject' => 'surface / the_ra_contact_volume_1', 'type' => 'density_anomaly']],
+            ]);
+
+        $tools = $this->makeTools(null, $metaBridgeSearch);
+        $tool = $tools->getAllTools()->firstWhere('name', 'search_meta_bridge');
+
+        $result = $tool->execute([
+            'query' => 'density anomaly',
+            'collection' => 'vectoreology_findings',
+        ]);
+
+        $this->assertSame('vectoreology_findings', $result['collection']);
+        $this->assertCount(1, $result['results']);
+    }
+
     public function test_search_meta_bridge_requires_a_query(): void
     {
         $tools = $this->makeTools();

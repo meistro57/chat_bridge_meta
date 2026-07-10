@@ -47,12 +47,14 @@ It searches five collections, selectable per call:
 | `sources` | `mb_sources` | Book/source-level metadata (title, author, tradition) |
 | `reflections` | `meta_reflections` | Synthesized cross-source findings (named vector `summary_vec`) |
 | `misfit_reports` | `misfit_reports` | MisfitCrew's synthesized cross-source pattern reports (named vector `summary_vec`) |
+| `vectoreology_findings` | `vectoreology_findings` | [Vectoreologist](https://github.com/meistro57/vectoreologist)'s topology findings — clusters, semantic bridges/moats, and density anomalies mined from the corpus's embedding space |
 
 **How it works under the hood** (`app/Services/MetaBridge/MetaBridgeSearchService.php`):
 
 - Query text is embedded with the same model the rest of the meta-bridge ecosystem uses (`google/gemini-embedding-001`, 3072-dim), so queries land in the same vector space as the ingested data — no separate embedding pipeline to maintain.
 - Each collection search is independently scoped and score-thresholded (`MB_QDRANT_SCORE_THRESHOLD`, default `0.5`).
 - The two "synthesis" collections (`reflections`, `misfit_reports`) use named vectors and default to `summary_vec` for general topical search.
+- `vectoreology_findings` is the odd one out: it stores vectors as a placeholder dim-1 value (it was never meant to be embedding-searched), so it's queried differently from the rest — by Qdrant payload filter (`type`, `is_anomaly`, `confidence`) plus an in-memory keyword match against the `subject`/`reasoning_chain` payload fields, not vector similarity.
 - Failures degrade gracefully — a failed embed or a Qdrant error returns an empty result set with a logged warning, never a hard crash mid-conversation.
 - This service has **no write path**. It only ever calls Qdrant's search endpoint. Ingestion, embedding generation, and collection maintenance all live in the `meta-bridge` and `MisfitCrew` repos, not here.
 
@@ -69,6 +71,7 @@ MB_QDRANT_COLLECTION_MISFIT_REPORTS=misfit_reports
 MB_QDRANT_REFLECTION_VECTOR=summary_vec
 MB_QDRANT_MISFIT_REPORTS_VECTOR=summary_vec
 MB_QDRANT_SCORE_THRESHOLD=0.5
+MB_QDRANT_COLLECTION_VECTOREOLOGY_FINDINGS=vectoreology_findings
 
 # Must match the embedding model meta-bridge ingested with
 OPENROUTER_EMBEDDING_MODEL=google/gemini-embedding-001
@@ -177,7 +180,7 @@ For the exhaustive list of everything the base platform supports, see **[FEATURE
 - Node.js >= 18
 - NPM or Yarn
 - Docker (recommended) or SQLite/PostgreSQL locally
-- A reachable Qdrant instance with the `mb_claims`, `mb_chunks`, `mb_sources`, `meta_reflections`, and `misfit_reports` collections already populated (via `meta-bridge` / `MisfitCrew` ingestion — this repo does not create them)
+- A reachable Qdrant instance with the `mb_claims`, `mb_chunks`, `mb_sources`, `meta_reflections`, `misfit_reports`, and `vectoreology_findings` collections already populated (via `meta-bridge` / `MisfitCrew` / `vectoreologist` ingestion — this repo does not create them)
 
 ---
 
@@ -305,6 +308,7 @@ See the full troubleshooting section in the base Chat Bridge docs — this deplo
 
 - **[meta-bridge](https://github.com/meistro57/meta-bridge)** — owns ingestion, embedding, and collection maintenance for the corpus this tool searches
 - **[MisfitCrew](https://github.com/meistro57/MisfitCrew)** — generates the cross-source pattern reports in `misfit_reports`
+- **[vectoreologist](https://github.com/meistro57/vectoreologist)** — generates the topology findings in `vectoreology_findings`
 - **[chat_bridge](https://github.com/meistro57/chat_bridge)** — the original, general-purpose deployment of this same platform
 
 ---

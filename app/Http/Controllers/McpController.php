@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Conversation;
 use App\Models\Message;
+use App\Services\MetaBridge\MetaBridgeSearchService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
@@ -128,6 +129,20 @@ class McpController extends Controller
                             'properties' => [],
                         ],
                     ],
+                    [
+                        'name' => 'search_vectoreology_findings',
+                        'description' => 'Search Vectoreologist topology findings (clusters, bridges, moats, anomalies) mined from the meta-bridge consciousness-literature corpus. Filter by type, anomaly flag, and/or min confidence, with an optional keyword match against subject/reasoning_chain.',
+                        'inputSchema' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'query' => ['type' => 'string', 'description' => 'Keyword to match against subject/reasoning_chain (optional)'],
+                                'limit' => ['type' => 'integer', 'default' => 10],
+                                'type' => ['type' => 'string', 'description' => "e.g. 'cluster_analysis', 'density_anomaly'"],
+                                'is_anomaly' => ['type' => 'boolean'],
+                                'min_confidence' => ['type' => 'number'],
+                            ],
+                        ],
+                    ],
                 ],
             ],
         ];
@@ -150,6 +165,7 @@ class McpController extends Controller
             'recent_chats' => $this->recentChats($arguments),
             'get_conversation' => $this->getConversation($arguments),
             'get_stats' => $this->getStats(),
+            'search_vectoreology_findings' => $this->searchVectoreologyFindings($arguments),
             default => null
         };
 
@@ -243,6 +259,19 @@ class McpController extends Controller
             'messages_count' => Message::count(),
             'embeddings_count' => Message::whereNotNull('embedding')->count(),
         ];
+    }
+
+    protected function searchVectoreologyFindings(array $args)
+    {
+        $service = app(MetaBridgeSearchService::class);
+
+        return $service->searchVectoreologyFindings(
+            query: (string) ($args['query'] ?? ''),
+            limit: (int) ($args['limit'] ?? 10),
+            type: isset($args['type']) ? (string) $args['type'] : null,
+            isAnomaly: array_key_exists('is_anomaly', $args) ? (bool) $args['is_anomaly'] : null,
+            minConfidence: isset($args['min_confidence']) ? (float) $args['min_confidence'] : null,
+        );
     }
 
     // --- Helpers ---
