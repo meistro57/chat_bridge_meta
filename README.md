@@ -55,6 +55,7 @@ It searches five collections, selectable per call:
 - Each collection search is independently scoped and score-thresholded (`MB_QDRANT_SCORE_THRESHOLD`, default `0.5`).
 - The two "synthesis" collections (`reflections`, `misfit_reports`) use named vectors and default to `summary_vec` for general topical search.
 - `vectoreology_findings` is the odd one out: it stores vectors as a placeholder dim-1 value (it was never meant to be embedding-searched), so it's queried differently from the rest — by Qdrant payload filter (`type`, `is_anomaly`, `confidence`) plus an in-memory keyword match against the `subject`/`reasoning_chain` payload fields, not vector similarity.
+- Every search is cached in Redis, keyed by collection + query + every parameter that affects the result (limit, threshold, filters). Agents commonly re-ask similar things across turns in the same conversation, so a cache hit skips both the embedding call and the Qdrant round trip. TTL and store are configurable (`MB_QDRANT_CACHE_*` below); a cache-layer failure (e.g. Redis unreachable) degrades to querying Qdrant directly rather than breaking the tool call.
 - Failures degrade gracefully — a failed embed or a Qdrant error returns an empty result set with a logged warning, never a hard crash mid-conversation.
 - This service has **no write path**. It only ever calls Qdrant's search endpoint. Ingestion, embedding generation, and collection maintenance all live in the `meta-bridge` and `MisfitCrew` repos, not here.
 
@@ -72,6 +73,11 @@ MB_QDRANT_REFLECTION_VECTOR=summary_vec
 MB_QDRANT_MISFIT_REPORTS_VECTOR=summary_vec
 MB_QDRANT_SCORE_THRESHOLD=0.5
 MB_QDRANT_COLLECTION_VECTOREOLOGY_FINDINGS=vectoreology_findings
+
+# Redis cache for search_meta_bridge results (speeds up repeated agent queries)
+MB_QDRANT_CACHE_ENABLED=true
+MB_QDRANT_CACHE_STORE=redis
+MB_QDRANT_CACHE_TTL_SECONDS=300
 
 # Must match the embedding model meta-bridge ingested with
 OPENROUTER_EMBEDDING_MODEL=google/gemini-embedding-001

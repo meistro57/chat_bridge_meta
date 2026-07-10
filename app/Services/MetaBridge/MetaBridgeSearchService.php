@@ -6,6 +6,7 @@ use App\Services\AI\EmbeddingService;
 use App\Services\Qdrant\QdrantConnector;
 use App\Services\Qdrant\Requests\ScrollPointsRequest;
 use App\Services\Qdrant\Requests\SearchPointsRequest;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -138,82 +139,92 @@ class MetaBridgeSearchService
     ): array {
         $collection = (string) config('services.meta_bridge.collection_vectoreology_findings', 'vectoreology_findings');
 
-        $must = [];
+        $cacheKey = $this->buildCacheKey('vectoreology_findings', [
+            'query' => $query,
+            'limit' => $limit,
+            'type' => $type,
+            'is_anomaly' => $isAnomaly,
+            'min_confidence' => $minConfidence,
+        ]);
 
-        if ($type !== null) {
-            $must[] = ['key' => 'type', 'match' => ['value' => $type]];
-        }
-        if ($isAnomaly !== null) {
-            $must[] = ['key' => 'is_anomaly', 'match' => ['value' => $isAnomaly]];
-        }
-        if ($minConfidence !== null) {
-            $must[] = ['key' => 'confidence', 'range' => ['gte' => $minConfidence]];
-        }
+        return $this->remember($cacheKey, function () use ($collection, $query, $limit, $type, $isAnomaly, $minConfidence): array {
+            $must = [];
 
-        $filter = $must === [] ? null : ['must' => $must];
+            if ($type !== null) {
+                $must[] = ['key' => 'type', 'match' => ['value' => $type]];
+            }
+            if ($isAnomaly !== null) {
+                $must[] = ['key' => 'is_anomaly', 'match' => ['value' => $isAnomaly]];
+            }
+            if ($minConfidence !== null) {
+                $must[] = ['key' => 'confidence', 'range' => ['gte' => $minConfidence]];
+            }
 
-        try {
-            $response = $this->qdrant->send(
-                new ScrollPointsRequest(
-                    collectionName: $collection,
-                    // Pull a wider batch than $limit since keyword matching happens
-                    // client-side after this; Qdrant itself can't text-search these fields.
-                    limit: max($limit * 10, 200),
-                    filter: $filter,
-                )
-            );
+            $filter = $must === [] ? null : ['must' => $must];
 
-            if (! $response->successful()) {
-                Log::warning('Vectoreology findings scroll failed', [
+            try {
+                $response = $this->qdrant->send(
+                    new ScrollPointsRequest(
+                        collectionName: $collection,
+                        // Pull a wider batch than $limit since keyword matching happens
+                        // client-side after this; Qdrant itself can't text-search these fields.
+                        limit: max($limit * 10, 200),
+                        filter: $filter,
+                    )
+                );
+
+                if (! $response->successful()) {
+                    Log::warning('Vectoreology findings scroll failed', [
+                        'collection' => $collection,
+                        'status' => $response->status(),
+                        'body' => $response->body(),
+                    ]);
+
+                    return [];
+                }
+
+                $points = $response->json('result.points', []);
+
+                if (! is_array($points)) {
+                    return [];
+                }
+
+                $needle = trim(mb_strtolower($query));
+
+                $matches = array_values(array_filter(
+                    array_map(
+                        static fn (array $point): array => is_array($point['payload'] ?? null) ? $point['payload'] : [],
+                        array_filter($points, static fn ($point): bool => is_array($point))
+                    ),
+                    function (array $payload) use ($needle): bool {
+                        if ($needle === '') {
+                            return true;
+                        }
+
+                        $haystack = mb_strtolower(
+                            (string) ($payload['subject'] ?? '').' '.(string) ($payload['reasoning_chain'] ?? '')
+                        );
+
+                        return str_contains($haystack, $needle);
+                    }
+                ));
+
+                // Higher-confidence findings first among matches.
+                usort($matches, static fn (array $a, array $b): int => ($b['confidence'] ?? 0) <=> ($a['confidence'] ?? 0));
+
+                return array_map(
+                    static fn (array $payload): array => ['score' => null, 'payload' => $payload],
+                    array_slice($matches, 0, $limit)
+                );
+            } catch (\Throwable $exception) {
+                Log::warning('Vectoreology findings search threw an exception', [
                     'collection' => $collection,
-                    'status' => $response->status(),
-                    'body' => $response->body(),
+                    'error' => $exception->getMessage(),
                 ]);
 
                 return [];
             }
-
-            $points = $response->json('result.points', []);
-
-            if (! is_array($points)) {
-                return [];
-            }
-
-            $needle = trim(mb_strtolower($query));
-
-            $matches = array_values(array_filter(
-                array_map(
-                    static fn (array $point): array => is_array($point['payload'] ?? null) ? $point['payload'] : [],
-                    array_filter($points, static fn ($point): bool => is_array($point))
-                ),
-                function (array $payload) use ($needle): bool {
-                    if ($needle === '') {
-                        return true;
-                    }
-
-                    $haystack = mb_strtolower(
-                        (string) ($payload['subject'] ?? '').' '.(string) ($payload['reasoning_chain'] ?? '')
-                    );
-
-                    return str_contains($haystack, $needle);
-                }
-            ));
-
-            // Higher-confidence findings first among matches.
-            usort($matches, static fn (array $a, array $b): int => ($b['confidence'] ?? 0) <=> ($a['confidence'] ?? 0));
-
-            return array_map(
-                static fn (array $payload): array => ['score' => null, 'payload' => $payload],
-                array_slice($matches, 0, $limit)
-            );
-        } catch (\Throwable $exception) {
-            Log::warning('Vectoreology findings search threw an exception', [
-                'collection' => $collection,
-                'error' => $exception->getMessage(),
-            ]);
-
-            return [];
-        }
+        });
     }
 
     /**
@@ -226,57 +237,119 @@ class MetaBridgeSearchService
         ?float $scoreThreshold,
         ?string $vectorName = null,
     ): array {
-        $embedding = $this->embeddingService->getEmbedding($query);
+        $resolvedThreshold = $scoreThreshold ?? (float) config('services.meta_bridge.score_threshold', 0.5);
 
-        if (! $embedding) {
-            Log::warning('Meta Bridge search: failed to generate query embedding', [
-                'collection' => $collection,
-            ]);
+        $cacheKey = $this->buildCacheKey($collection, [
+            'query' => $query,
+            'limit' => $limit,
+            'score_threshold' => $resolvedThreshold,
+            'vector_name' => $vectorName,
+        ]);
 
-            return [];
-        }
+        return $this->remember($cacheKey, function () use ($collection, $query, $limit, $resolvedThreshold, $vectorName): array {
+            $embedding = $this->embeddingService->getEmbedding($query);
 
-        try {
-            $response = $this->qdrant->send(
-                new SearchPointsRequest(
-                    collectionName: $collection,
-                    vector: $embedding,
-                    limit: $limit,
-                    scoreThreshold: $scoreThreshold ?? (float) config('services.meta_bridge.score_threshold', 0.5),
-                    vectorName: $vectorName,
-                )
-            );
-
-            if (! $response->successful()) {
-                Log::warning('Meta Bridge search failed', [
+            if (! $embedding) {
+                Log::warning('Meta Bridge search: failed to generate query embedding', [
                     'collection' => $collection,
-                    'status' => $response->status(),
-                    'body' => $response->body(),
                 ]);
 
                 return [];
             }
 
-            $results = $response->json('result', []);
+            try {
+                $response = $this->qdrant->send(
+                    new SearchPointsRequest(
+                        collectionName: $collection,
+                        vector: $embedding,
+                        limit: $limit,
+                        scoreThreshold: $resolvedThreshold,
+                        vectorName: $vectorName,
+                    )
+                );
 
-            if (! is_array($results)) {
+                if (! $response->successful()) {
+                    Log::warning('Meta Bridge search failed', [
+                        'collection' => $collection,
+                        'status' => $response->status(),
+                        'body' => $response->body(),
+                    ]);
+
+                    return [];
+                }
+
+                $results = $response->json('result', []);
+
+                if (! is_array($results)) {
+                    return [];
+                }
+
+                return array_values(array_map(
+                    static fn (array $point): array => [
+                        'score' => isset($point['score']) ? (float) $point['score'] : null,
+                        'payload' => is_array($point['payload'] ?? null) ? $point['payload'] : [],
+                    ],
+                    array_filter($results, static fn ($point): bool => is_array($point))
+                ));
+            } catch (\Throwable $exception) {
+                Log::warning('Meta Bridge search threw an exception', [
+                    'collection' => $collection,
+                    'error' => $exception->getMessage(),
+                ]);
+
                 return [];
             }
+        });
+    }
 
-            return array_values(array_map(
-                static fn (array $point): array => [
-                    'score' => isset($point['score']) ? (float) $point['score'] : null,
-                    'payload' => is_array($point['payload'] ?? null) ? $point['payload'] : [],
-                ],
-                array_filter($results, static fn ($point): bool => is_array($point))
-            ));
+    /**
+     * Build a deterministic Redis cache key for a search call, scoped by
+     * collection and every parameter that affects the result set.
+     *
+     * @param  array<string, mixed>  $params
+     */
+    protected function buildCacheKey(string $collection, array $params): string
+    {
+        ksort($params);
+        $normalized = array_map(
+            static fn ($value) => is_string($value) ? trim(mb_strtolower($value)) : $value,
+            $params
+        );
+
+        return 'meta_bridge_search:'.$collection.':'.md5(json_encode($normalized, JSON_UNESCAPED_SLASHES));
+    }
+
+    /**
+     * Cache a search callback's result in Redis (or whatever
+     * services.meta_bridge.cache_store points at). Repeated identical
+     * agent queries — common across turns in the same conversation — skip
+     * the embedding call and the Qdrant round trip entirely on a hit.
+     *
+     * Caching can be disabled via MB_QDRANT_CACHE_ENABLED=false, and any
+     * cache-layer failure (e.g. Redis unreachable) degrades to calling the
+     * search directly rather than breaking the tool call.
+     *
+     * @param  \Closure(): array<int, array<string, mixed>>  $callback
+     * @return array<int, array<string, mixed>>
+     */
+    protected function remember(string $cacheKey, \Closure $callback): array
+    {
+        if (! (bool) config('services.meta_bridge.cache_enabled', true)) {
+            return $callback();
+        }
+
+        $store = (string) config('services.meta_bridge.cache_store', 'redis');
+        $ttlSeconds = max(1, (int) config('services.meta_bridge.cache_ttl_seconds', 300));
+
+        try {
+            return Cache::store($store)->remember($cacheKey, $ttlSeconds, $callback);
         } catch (\Throwable $exception) {
-            Log::warning('Meta Bridge search threw an exception', [
-                'collection' => $collection,
+            Log::warning('Meta Bridge search cache unavailable; querying directly', [
+                'cache_store' => $store,
                 'error' => $exception->getMessage(),
             ]);
 
-            return [];
+            return $callback();
         }
     }
 }

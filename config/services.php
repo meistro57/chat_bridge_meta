@@ -139,6 +139,13 @@ return [
         // payload filter (type, is_anomaly, confidence) + in-memory keyword
         // match on subject/reasoning_chain instead. See searchVectoreologyFindings().
         'collection_vectoreology_findings' => env('MB_QDRANT_COLLECTION_VECTOREOLOGY_FINDINGS', 'vectoreology_findings'),
+
+        // Redis cache for search_meta_bridge results. Agents in the same
+        // conversation often re-ask similar things across turns; caching
+        // skips the embedding call + Qdrant round trip on a hit.
+        'cache_enabled' => (bool) env('MB_QDRANT_CACHE_ENABLED', true),
+        'cache_store' => env('MB_QDRANT_CACHE_STORE', 'redis'),
+        'cache_ttl_seconds' => (int) env('MB_QDRANT_CACHE_TTL_SECONDS', 300),
     ],
 
     'chat_bridge' => [
